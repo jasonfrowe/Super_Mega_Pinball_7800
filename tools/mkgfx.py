@@ -1,13 +1,8 @@
 #!/usr/bin/env python3
 """Generate 160A graphics, playfield tilemap, and assembly tables for Super Mega Pinball 7800.
 
-Pure Python (zero external dependencies). Inspired by Pinball Dreams (Amiga 500)
-and AtariGammaForce's 160A vertical scrolling engine.
-Outputs:
-  src/gfx/*.png        160A indexed 2-bit PNGs (4 colors: 0 = transparent, 1..3 = palette slots)
-  src/gen/gfx.bas      incgraphic statements for 7800basic
-  src/gen/consts.bas   shared constants for 7800basic and assembly
-  src/gen/data.asm     palette table, sprite descriptor tables, text strings, and 20-row table map
+Pure Python (zero external dependencies). Inspired by NES Pinball & Pinball Dreams,
+using AtariGammaForce's 160A vertical scrolling engine.
 """
 
 from pathlib import Path
@@ -21,14 +16,14 @@ GEN = ROOT / "src" / "gen"
 # 8 Hardware 160A Palettes (3 colors each + shared background $00 = black)
 BG_CODE = 0x00
 PAL_CODES = [
-    [0x04, 0x0A, 0x0F],  # P0: HUD Text, Chrome Rails & Outer Walls (Dark Gray, Silver, White)
-    [0x24, 0x1A, 0x0F],  # P1: Gold Flippers, Plunger & Score Popups (Bronze, Bright Gold, White)
-    [0x32, 0x36, 0x1E],  # P2: Hot Neon Red / Crimson Pop Bumpers (Dark Red, Neon Red, Yellow Core)
-    [0x84, 0x98, 0x9E],  # P3: Electric Cyan "HYPER RAMP" & Rollover Lanes (Deep Blue, Cyan, Ice White)
-    [0x52, 0x58, 0x5E],  # P4: Neon Magenta "WARP CHUTE", Slingshots & Spinner (Violet, Magenta, Pink)
-    [0xC2, 0xC8, 0xCE],  # P5: Emerald Green Drop Targets & Multi-Ball Lock (Forest, Neon Lime, Mint)
-    [0x22, 0x28, 0x1E],  # P6: "IGNITION" Rocket Centerpiece & Jackpot Trim (Rust, Blazing Orange, Yellow)
-    [0x94, 0x0C, 0x0F],  # P7: Chrome Steel Pinballs & Sparks (Steel Blue Shadow, Chrome Silver, White Glint)
+    [0x04, 0x0A, 0x0F],  # P0: HUD Text, Chrome Rails, Islands & Divider Walls (Dark Gray, Silver, White)
+    [0x24, 0x1A, 0x0F],  # P1: Gold Flippers, Plunger & Score Callouts (Bronze, Bright Gold, White)
+    [0x32, 0x36, 0x1E],  # P2: Hot Neon Red / Crimson Pop Bumpers & Bottom Funnel (Dark Red, Red, Yellow)
+    [0x84, 0x98, 0x9E],  # P3: Electric Cyan Channels, Upper Island & Rollover Dividers (Blue, Cyan, Ice White)
+    [0x52, 0x58, 0x5E],  # P4: Neon Pink/Magenta Slingshots, Right Gate & Spinner (Violet, Magenta, Pink)
+    [0xC2, 0xC8, 0xCE],  # P5: Emerald Green Center Cards, Upper Lock Chute & Plunger Track (Forest, Lime, Mint)
+    [0x22, 0x28, 0x1E],  # P6: Orange/Gold Left Target Bank & Center Bumper Ring (Rust, Orange, Yellow)
+    [0x94, 0x0C, 0x0F],  # P7: Chrome Steel Pinballs & Specular Glint (Steel Blue, Chrome Silver, White)
 ]
 
 PREVIEW_RGB = [
@@ -45,12 +40,11 @@ PREVIEW_RGB = [
 
 
 def save_160a(path: Path, grid, pal_idx: int):
-    """Write a 2D list of 2-bit slot indices (0..3) as a 2-bit indexed PNG for 7800basic."""
     h, w = len(grid), len(grid[0])
     assert w % 4 == 0, f"Width {w} must be a multiple of 4 for 2-bit PNG"
     raw = bytearray()
     for row in grid:
-        raw.append(0)  # Filter type 0 (None)
+        raw.append(0)
         for x in range(0, w, 4):
             b = ((row[x] & 3) << 6) | ((row[x + 1] & 3) << 4) | ((row[x + 2] & 3) << 2) | (row[x + 3] & 3)
             raw.append(b)
@@ -161,6 +155,8 @@ def char_index(ch: str) -> int:
 
 # ---------------------------------------------------------------------------
 # 2. Playfield Background Tiles (8x16 each in 160A)
+#    Modeled after NES Pinball's two-tier playfield with side channels,
+#    islands, upper & lower flippers, inlane/outlane dividers, and V-drain!
 # ---------------------------------------------------------------------------
 def build_table_tiles():
     tiles = []
@@ -175,185 +171,165 @@ def build_table_tiles():
     # Tile 0: Blank background (never drawn, costs 0 DMA!)
     add_tile(empty_grid(16, 8), 0)
 
-    # Tile 1: Left Chrome Wall (col 1, X=8..15) - P0
+    # Tile 1: Left Outer Wall (col 1, X=8..15) - P0 Chrome
     t = empty_grid(16, 8)
     for y in range(16):
         t[y][4] = 1
-        t[y][5] = 1
+        t[y][5] = 2
         t[y][6] = 2
         t[y][7] = 3
-        if y in (0, 7, 8, 15):
-            t[y][4] = 2
-            t[y][5] = 2
     T_WALL_L = add_tile(t, 0)
 
-    # Tile 2: Right Chrome Wall (col 18, X=144..151) - P0
+    # Tile 2: Right Outer Wall (col 18, X=144..151) - P0 Chrome
     T_WALL_R = add_tile(mirror_h(t), 0)
 
-    # Tile 3: Plunger Lane Divider Wall (col 16, X=128..135) - P0
+    # Tile 3: Plunger Lane Divider Wall (col 16, X=128..135) - P0 Chrome
     t = empty_grid(16, 8)
     for y in range(16):
-        t[y][2] = 3
+        t[y][1] = 3
+        t[y][2] = 2
         t[y][3] = 2
-        t[y][4] = 2
-        t[y][5] = 1
-        if y in (3, 11):
-            t[y][3] = 3
-            t[y][4] = 3
+        t[y][4] = 1
     T_PLUNGE_DIV = add_tile(t, 0)
 
-    # Tile 4: Plunger Shooter Lane Track (col 17, X=136..143) - P5 (Emerald gauge ticks)
+    # Tile 4: Plunger Shooter Lane Track (col 17, X=136..143) - P5 Emerald ticks
     t = empty_grid(16, 8)
     for y in range(0, 16, 4):
         for x in range(2, 6):
             t[y][x] = 1
-    t[2][3] = 2
-    t[2][4] = 2
-    t[10][3] = 2
-    t[10][4] = 2
+    t[2][3] = t[2][4] = 2
+    t[10][3] = t[10][4] = 2
     T_PLUNGE_TRK = add_tile(t, 5)
 
     # Tile 5: Top Arch Left Curve (P3 Electric Cyan)
     t = empty_grid(16, 8)
     for y in range(16):
         x0 = max(0, 6 - y // 2)
-        for x in range(x0, min(8, x0 + 2)):
-            t[y][x] = 3
-        if x0 + 2 < 8:
-            t[y][x0 + 2] = 2
+        for x in range(x0, min(8, x0 + 3)):
+            t[y][x] = 3 if x == x0 else 2
     T_ARCH_L = add_tile(t, 3)
 
-    # Tile 6: Top Arch Horizontal Rail (P3 Electric Cyan)
+    # Tile 6: Top Arch Horizontal Roof (P3 Electric Cyan)
     t = empty_grid(16, 8)
     for x in range(8):
         t[2][x] = 3
         t[3][x] = 3
         t[4][x] = 2
-        t[5][x] = 2
-        t[6][x] = 1
+        t[5][x] = 1
     T_ARCH_H = add_tile(t, 3)
 
     # Tile 7: Top Arch Right Curve (P3 Electric Cyan)
     T_ARCH_R = add_tile(mirror_h(tiles[T_ARCH_L]), 3)
 
-    # Tile 8: Top Rollover Lane Divider Post (P3 Cyan/White)
+    # Tile 8: Vertical Channel / Lane Divider Wall (P3 Electric Cyan)
+    # Used for:
+    #   - Upper-left orbit inner wall (col 3, separating col 2 orbit channel from main arena!)
+    #   - Top rollover lane dividers (cols 5, 7, 9, 11)
+    #   - Center target lane dividers
+    #   - Lower inlane/outlane divider posts (col 3 and col 14!)
     t = empty_grid(16, 8)
-    for y in range(2, 14):
+    for y in range(1, 15):
+        t[y][2] = 1
         t[y][3] = 3
         t[y][4] = 2
-    t[1][3] = 3
-    t[1][4] = 3
-    t[14][3] = 1
-    t[14][4] = 1
-    T_ROLL_DIV = add_tile(t, 3)
+        t[y][5] = 1
+    t[0][3] = t[0][4] = 3
+    t[15][3] = t[15][4] = 2
+    T_CHAN_WALL = add_tile(t, 3)
 
-    # Tile 9: Left "HYPER RAMP" Track (P3 Electric Cyan chevrons pointing up)
+    # Tile 9: Solid Mid-Table Island Block (P3 Blue/Cyan, separates outer side channel from upper flippers!)
     t = empty_grid(16, 8)
     for y in range(16):
-        t[y][0] = 2
-        t[y][7] = 2
-    for base in (2, 10):
-        t[base][3] = t[base][4] = 3
-        for x in range(2, 6):
-            t[base + 1][x] = 3
         for x in range(1, 7):
-            t[base + 2][x] = 2
-        t[base + 3][1] = t[base + 3][2] = t[base + 3][5] = t[base + 3][6] = 1
-    T_RAMP_L = add_tile(t, 3)
+            t[y][x] = 2 if (y in (0, 15) or x in (1, 6)) else 1
+        t[y][1] = 3
+        t[y][6] = 3
+    T_ISLAND = add_tile(t, 3)
 
-    # Tile 10: Right "WARP CHUTE" Track (P4 Neon Magenta chevrons)
+    # Tile 10: Upper Flipper Anchor Shoulder Left (P3 Cyan/White, connects col 4 island to Upper Left Flipper at col 5!)
+    t = empty_grid(16, 8)
+    for y in range(12):
+        lim = min(8, 2 + y // 2)
+        for x in range(lim):
+            t[y][x] = 2
+        if lim < 8:
+            t[y][lim] = 3
+    T_UP_ANCHOR_L = add_tile(t, 3)
+
+    # Tile 11: Upper Flipper Anchor Shoulder Right (P3 Cyan/White, connects col 13 island to Upper Right Flipper at col 12!)
+    T_UP_ANCHOR_R = add_tile(mirror_h(t), 3)
+
+    # Tile 12: Upper-Right Green Lock Chute Wall & Track (P5 Emerald Green, like NES Pinball's 500 chute!)
     t = empty_grid(16, 8)
     for y in range(16):
-        t[y][0] = 2
-        t[y][7] = 2
-    for base in (2, 10):
-        t[base][3] = t[base][4] = 3
-        for x in range(2, 6):
-            t[base + 1][x] = 3
-        for x in range(1, 7):
-            t[base + 2][x] = 2
-    T_CHUTE_R = add_tile(t, 4)
-
-    # Tile 11: Center "IGNITION" Sunburst / Star Grid Left (P6 Orange/Yellow)
-    t = empty_grid(16, 8)
-    for y in range(2, 14):
-        for x in range(1, 8):
-            if (x + y) % 3 == 0:
-                t[y][x] = 2 if (y < 6 or y > 10) else 3
-            elif (x * y) % 5 == 0:
-                t[y][x] = 1
-    T_CORE_L = add_tile(t, 6)
-
-    # Tile 12: Center "IGNITION" Sunburst / Star Grid Right (P6 Orange/Yellow)
-    T_CORE_R = add_tile(mirror_h(t), 6)
-
-    # Tile 13: Drop Target Backing Bank (col 2, X=16..23) - P5 Emerald Green
-    t = empty_grid(16, 8)
-    for y in range(16):
-        t[y][0] = 2
+        t[y][0] = 3
         t[y][1] = 2
-        if y in (2, 3, 4, 5, 10, 11, 12, 13):
+        t[y][6] = 2
+        t[y][7] = 3
+        if (y % 4) < 2:
+            t[y][3] = t[y][4] = 3
+    T_LOCK_CHUTE = add_tile(t, 5)
+
+    # Tile 13: Left Side Target Bank ("1..7" yellow/orange side targets on col 2) - P6
+    t = empty_grid(16, 8)
+    for y in range(16):
+        t[y][0] = 1
+        if (y % 4) != 3:
+            t[y][1] = 2
             t[y][2] = 3
             t[y][3] = 3
-            t[y][4] = 2
-    T_DROP_WALL = add_tile(t, 5)
+    T_SIDE_TGTS_L = add_tile(t, 6)
 
-    # Tile 14: Left Slingshot Diagonal Kicker (P4 Neon Magenta)
+    # Tile 14: Right Side Pink Gate / Chute (col 15) - P4 Neon Magenta
     t = empty_grid(16, 8)
-    for y in range(16):
-        t[y][0] = 2
-        dx = min(7, y // 2)
-        t[y][dx] = 3
-        if dx > 0:
-            t[y][dx - 1] = 1
+    for y in range(0, 16, 3):
+        for x in range(1, 7):
+            t[y][x] = 3
+            if y + 1 < 16:
+                t[y + 1][x] = 2
+    T_SIDE_GATE_R = add_tile(t, 4)
+
+    # Tile 15: Left Slingshot Kicker Triangle (P4 Neon Magenta)
+    t = empty_grid(16, 8)
+    for y in range(2, 15):
+        w = min(5, (y - 1) // 2 + 1)
+        t[y][1] = 2
+        for x in range(2, 1 + w):
+            t[y][x] = 2
+        t[y][1 + w] = 3
     T_SLING_L = add_tile(t, 4)
 
-    # Tile 15: Right Slingshot Diagonal Kicker (P4 Neon Magenta)
+    # Tile 16: Right Slingshot Kicker Triangle (P4 Neon Magenta)
     T_SLING_R = add_tile(mirror_h(t), 4)
 
-    # Tile 16: Left Inlane Funnel Rail (slopes down-right toward Left Flipper) - P0 Chrome
+    # Tile 17: Left Inlane Chrome Rail (slopes down-right in cols 4..5 directly to Left Flipper at col 6!) - P0 Chrome
     t = empty_grid(16, 8)
     for y in range(16):
         x = y // 2
-        for k in range(x, min(8, x + 2)):
-            t[y][k] = 3
+        t[y][x] = 2
+        if x + 1 < 8:
+            t[y][x + 1] = 3
         if x > 0:
-            t[y][x - 1] = 2
-    T_FUNNEL_L = add_tile(t, 0)
+            t[y][x - 1] = 1
+    T_INLANE_L = add_tile(t, 0)
 
-    # Tile 17: Right Inlane Funnel Rail (slopes down-left toward Right Flipper) - P0 Chrome
-    T_FUNNEL_R = add_tile(mirror_h(t), 0)
+    # Tile 18: Right Inlane Chrome Rail (slopes down-left in cols 12..13 directly to Right Flipper at col 11!) - P0 Chrome
+    T_INLANE_R = add_tile(mirror_h(t), 0)
 
-    # Tile 18: Bonus Multiplier Diamond Floor Decal (P3 Cyan/Blue)
+    # Tile 19: Lower Flipper Anchor Left (col 5 at row 1, connects inlane rail solidly to Left Flipper pivot at X=48!) - P0 Chrome
     t = empty_grid(16, 8)
-    diamond = [
-        "...22...",
-        "..2332..",
-        ".231132.",
-        "23133132",
-        "23133132",
-        ".231132.",
-        "..2332..",
-        "...22...",
-    ]
-    for y, r in enumerate(diamond):
-        for x, c in enumerate(r):
-            if c != ".":
-                t[4 + y][x] = int(c)
-    T_DEC_DIAMOND = add_tile(t, 3)
+    for y in range(8):
+        for x in range(y, 8):
+            t[y][x] = 3 if x == 7 else 2
+    T_LOW_ANCHOR_L = add_tile(t, 0)
 
-    # Tile 19: Neon Starfield / Table Floor Accent (P4 Violet/Pink)
-    t = empty_grid(16, 8)
-    t[3][3] = 2
-    t[3][4] = 3
-    t[11][2] = 1
-    t[12][5] = 2
-    T_DEC_STAR = add_tile(t, 4)
+    # Tile 20: Lower Flipper Anchor Right (col 12 at row 1, connects inlane rail solidly to Right Flipper pivot at X=95!) - P0 Chrome
+    T_LOW_ANCHOR_R = add_tile(mirror_h(t), 0)
 
-    # Tile 20: Drain Apron Left (P2 Red/Gold)
+    # Tile 21: Bottom V-Funnel Drain Wall Left (slopes down-right toward center drain hole) - P2 Red/Gold
     t = empty_grid(16, 8)
     for y in range(16):
-        lim = min(8, 2 + y // 2)
+        lim = min(8, 1 + y // 2)
         for x in range(lim):
             t[y][x] = 1
         if lim < 8:
@@ -362,8 +338,26 @@ def build_table_tiles():
             t[y][lim + 1] = 3
     T_APRON_L = add_tile(t, 2)
 
-    # Tile 21: Drain Apron Right (P2 Red/Gold)
+    # Tile 22: Bottom V-Funnel Drain Wall Right (slopes down-left toward center drain hole) - P2 Red/Gold
     T_APRON_R = add_tile(mirror_h(t), 2)
+
+    # Tile 23: Center Table Star / Arrow Decal (P6 Orange/Yellow)
+    t = empty_grid(16, 8)
+    arrow = [
+        "...33...",
+        "..2332..",
+        ".232232.",
+        "231..132",
+        "...22...",
+        "...22...",
+        "..1221..",
+        "........",
+    ]
+    for y, r in enumerate(arrow):
+        for x, c in enumerate(r):
+            if c != ".":
+                t[4 + y][x] = int(c)
+    T_DEC_ARROW = add_tile(t, 6)
 
     names = {
         "EMPTY": 0,
@@ -374,36 +368,41 @@ def build_table_tiles():
         "ARCH_L": T_ARCH_L,
         "ARCH_H": T_ARCH_H,
         "ARCH_R": T_ARCH_R,
-        "ROLL_DIV": T_ROLL_DIV,
-        "RAMP_L": T_RAMP_L,
-        "CHUTE_R": T_CHUTE_R,
-        "CORE_L": T_CORE_L,
-        "CORE_R": T_CORE_R,
-        "DROP_WALL": T_DROP_WALL,
+        "CHAN_WALL": T_CHAN_WALL,
+        "ISLAND": T_ISLAND,
+        "UP_ANCHOR_L": T_UP_ANCHOR_L,
+        "UP_ANCHOR_R": T_UP_ANCHOR_R,
+        "LOCK_CHUTE": T_LOCK_CHUTE,
+        "SIDE_TGTS_L": T_SIDE_TGTS_L,
+        "SIDE_GATE_R": T_SIDE_GATE_R,
         "SLING_L": T_SLING_L,
         "SLING_R": T_SLING_R,
-        "FUNNEL_L": T_FUNNEL_L,
-        "FUNNEL_R": T_FUNNEL_R,
-        "DEC_DIAMOND": T_DEC_DIAMOND,
-        "DEC_STAR": T_DEC_STAR,
+        "INLANE_L": T_INLANE_L,
+        "INLANE_R": T_INLANE_R,
+        "LOW_ANCHOR_L": T_LOW_ANCHOR_L,
+        "LOW_ANCHOR_R": T_LOW_ANCHOR_R,
         "APRON_L": T_APRON_L,
         "APRON_R": T_APRON_R,
+        "DEC_ARROW": T_DEC_ARROW,
     }
     return tiles, pals, names
 
 
 # ---------------------------------------------------------------------------
-# 3. Build 20-Row x 20-Column Pinball Table Map
+# 3. Build 20-Row x 20-Column Pinball Table Map (NES Pinball Inspired Layout!)
 #    Row 19 = Top of Table (world_y = 0..15)
 #    Row 0  = Bottom of Table (world_y = 304..319)
+#    Playfield spans cols 2..15 (X = 16..127), symmetric around X = 72!
 # ---------------------------------------------------------------------------
 def build_pinball_map(T):
     m = [[0] * 20 for _ in range(20)]
 
+    # Outer left wall (col 1) and right wall (col 18) on all rows 0..19
     for r in range(20):
         m[r][1] = T["WALL_L"]
         m[r][18] = T["WALL_R"]
 
+    # Plunger divider wall (col 16) and shooter track (col 17) on rows 0..16
     for r in range(17):
         m[r][16] = T["PLUNGE_DIV"]
         m[r][17] = T["PLUNGE_TRK"]
@@ -415,80 +414,115 @@ def build_pinball_map(T):
         m[19][c] = T["ARCH_H"]
     m[19][17] = T["ARCH_R"]
 
-    # Row 18 (world_y = 16..31): Upper Arch & Shooter Exit
+    # Row 18 (world_y = 16..31): Upper Arch & Left Orbit Channel Entrance
     m[18][2] = T["ARCH_L"]
-    m[18][5] = T["DEC_STAR"]
-    m[18][9] = T["DEC_DIAMOND"]
-    m[18][13] = T["DEC_STAR"]
+    m[18][4] = T["CHAN_WALL"]   # Separates Left Orbit Channel (cols 2..3) from Top Rollover Lanes!
+    m[18][8] = T["DEC_ARROW"]
+    m[18][13] = T["ARCH_R"]
     m[18][17] = T["ARCH_R"]
 
-    # Row 17 (world_y = 32..47): Top Rollover Lanes (I - G - N)
-    for c in (4, 7, 10, 13):
-        m[17][c] = T["ROLL_DIV"]
+    # Row 17 (world_y = 32..47): Top Rollover Lanes (I - G - N) + Left Orbit Channel
+    # Col 2..3 is the Upper-Left Orbit Channel; Cols 4, 7, 10, 13 are the 3 Rollover Lane dividers!
+    m[17][4] = T["CHAN_WALL"]
+    m[17][7] = T["CHAN_WALL"]
+    m[17][10] = T["CHAN_WALL"]
+    m[17][13] = T["CHAN_WALL"]
 
-    # Rows 13..16 (world_y = 48..111): Upper Turbo Pop Bumper Arena
-    m[16][3] = T["DEC_STAR"]
-    m[16][14] = T["DEC_STAR"]
-    m[15][8] = T["DEC_DIAMOND"]
-    m[14][3] = T["DEC_STAR"]
-    m[14][14] = T["DEC_STAR"]
-    m[13][8] = T["DEC_DIAMOND"]
+    # Rows 14..16 (world_y = 48..95):
+    #   - Left Orbit Channel wall at col 3 (so col 2 is a dedicated narrow left orbit chute!)
+    #   - Center-Upper Pop Bumper Arena (cols 5..11)
+    #   - Upper-Right Green Multi-Ball Lock Chute at cols 13..14 (walled on left by col 12!)
+    for r in (14, 15, 16):
+        m[r][3] = T["CHAN_WALL"]
+        m[r][12] = T["CHAN_WALL"]
+        m[r][13] = T["LOCK_CHUTE"]
+        m[r][14] = T["LOCK_CHUTE"]
 
-    # Rows 9..12 (world_y = 112..175): Left HYPER RAMP, Center IGNITION Core, Right WARP CHUTE
-    for r in (9, 10, 11, 12):
-        m[r][2] = T["RAMP_L"]
-        m[r][3] = T["RAMP_L"]
-        m[r][14] = T["CHUTE_R"]
-        m[r][15] = T["CHUTE_R"]
-    m[11][8] = T["CORE_L"]
-    m[11][9] = T["CORE_R"]
-    m[10][8] = T["CORE_L"]
-    m[10][9] = T["CORE_R"]
+    # Rows 12..13 (world_y = 96..127):
+    #   - Left Side Bypass Channel (col 2, X=16..23) separated from main arena by Left Island (cols 3..4)!
+    #   - Right Upper Island (cols 13..14) separating upper lock chute from lower arena!
+    for r in (12, 13):
+        m[r][3] = T["ISLAND"]
+        m[r][4] = T["ISLAND"]
+        m[r][8] = T["DEC_ARROW"]
+        m[r][13] = T["ISLAND"]
+        m[r][14] = T["ISLAND"]
 
-    # Rows 6..8 (world_y = 176..223): Left Drop Target Bank & Center Bonus Diamonds
-    for r in (6, 7, 8):
-        m[r][2] = T["DROP_WALL"]
-    m[8][8] = T["DEC_DIAMOND"]
-    m[7][7] = T["DEC_DIAMOND"]
-    m[7][9] = T["DEC_DIAMOND"]
-    m[6][8] = T["DEC_DIAMOND"]
+    # Row 11 (world_y = 128..143): Upper Flippers Row!
+    #   - Col 2: Left Side Bypass Channel (continues down!)
+    #   - Col 3: Left Island, Col 4: Upper Flipper Anchor Left -> connects to Upper Left Flipper at cols 5..6 (X=40..55)!
+    #   - Col 13: Upper Flipper Anchor Right -> connects to Upper Right Flipper at cols 11..12 (X=88..103)!
+    #   - Col 14: Right Island
+    m[11][3] = T["ISLAND"]
+    m[11][4] = T["UP_ANCHOR_L"]
+    m[11][13] = T["UP_ANCHOR_R"]
+    m[11][14] = T["ISLAND"]
 
-    # Rows 3..5 (world_y = 224..271): Slingshot Kickers & Inlane/Outlane Guides
-    m[5][3] = T["ROLL_DIV"]
-    m[5][4] = T["SLING_L"]
-    m[5][13] = T["SLING_R"]
-    m[5][14] = T["ROLL_DIV"]
+    # Row 10 (world_y = 144..159): Below Upper Flippers, Left Side Channel still walled by col 3!
+    m[10][3] = T["ISLAND"]
+    m[10][14] = T["ISLAND"]
 
-    m[4][3] = T["ROLL_DIV"]
-    m[4][4] = T["SLING_L"]
-    m[4][5] = T["SLING_L"]
-    m[4][8] = T["DEC_DIAMOND"]
-    m[4][12] = T["SLING_R"]
-    m[4][13] = T["SLING_R"]
-    m[4][14] = T["ROLL_DIV"]
+    # Row 9 (world_y = 160..175): 4 Center Green Targets (I - G - N - T) sit here across cols 5..11
+    m[9][3] = T["CHAN_WALL"]
+    m[9][14] = T["CHAN_WALL"]
 
-    m[3][2] = T["FUNNEL_L"]
-    m[3][3] = T["FUNNEL_L"]
-    m[3][14] = T["FUNNEL_R"]
-    m[3][15] = T["FUNNEL_R"]
+    # Row 8 (world_y = 176..191): Vertical Lane Dividers below the 4 Center Targets + Left Side Target Bank
+    m[8][2] = T["SIDE_TGTS_L"]
+    for c in (5, 7, 9, 11):
+        m[8][c] = T["CHAN_WALL"]
+    m[8][15] = T["SIDE_GATE_R"]
 
-    # Row 2 (world_y = 272..287): Lower Funnel into Flippers
-    m[2][3] = T["FUNNEL_L"]
-    m[2][4] = T["FUNNEL_L"]
-    m[2][5] = T["FUNNEL_L"]
-    m[2][12] = T["FUNNEL_R"]
-    m[2][13] = T["FUNNEL_R"]
-    m[2][14] = T["FUNNEL_R"]
+    # Rows 6..7 (world_y = 192..223): Lower 3 Pop Bumpers Arena + Left Target Bank (col 2) + Right Pink Gate (col 15)
+    for r in (6, 7):
+        m[r][2] = T["SIDE_TGTS_L"]
+        m[r][15] = T["SIDE_GATE_R"]
+    m[7][8] = T["DEC_ARROW"]
 
-    # Row 1 (world_y = 288..303): Flipper Zone & Apron Top
+    # Rows 3..5 (world_y = 224..271): Walled Side Channels (Outlanes & Inlanes) + Slingshot Kickers!
+    #   - Col 2 (X=16..23): Left Outlane Drain Channel!
+    #   - Col 3 (X=24..31): Solid Inlane/Outlane Divider Wall!
+    #   - Col 4 (X=32..39): Left Inlane Channel!
+    #   - Col 5 (X=40..47): Left Slingshot Kicker Triangle!
+    #   - Col 12 (X=96..103): Right Slingshot Kicker Triangle!
+    #   - Col 13 (X=104..111): Right Inlane Channel!
+    #   - Col 14 (X=112..119): Solid Inlane/Outlane Divider Wall!
+    #   - Col 15 (X=120..127): Right Outlane Drain Channel!
+    for r in (4, 5):
+        m[r][3] = T["CHAN_WALL"]
+        m[r][5] = T["SLING_L"]
+        m[r][12] = T["SLING_R"]
+        m[r][14] = T["CHAN_WALL"]
+
+    # Row 3 (world_y = 256..271): Inlanes begin curving inward toward Lower Flippers; Outlanes stay outside!
+    m[3][3] = T["CHAN_WALL"]
+    m[3][4] = T["INLANE_L"]
+    m[3][13] = T["INLANE_R"]
+    m[3][14] = T["CHAN_WALL"]
+
+    # Row 2 (world_y = 272..287): Inlane Rails feed directly into Lower Flipper Anchors at cols 5 and 12!
+    m[2][2] = T["APRON_L"]
+    m[2][4] = T["INLANE_L"]
+    m[2][5] = T["INLANE_L"]
+    m[2][12] = T["INLANE_R"]
+    m[2][13] = T["INLANE_R"]
+    m[2][15] = T["APRON_R"]
+
+    # Row 1 (world_y = 288..303): Lower Flipper Row!
+    #   - Cols 2..4: Left Bottom V-Funnel Wall
+    #   - Col 5 (X=40..47): Lower Flipper Anchor Left -> touches Left Flipper at X=48..63 (cols 6..7)!
+    #   - Cols 8..9 (X=64..79): 16-pixel Center Drain Gap between the flippers!
+    #   - Col 12 (X=96..103): Lower Flipper Anchor Right -> touches Right Flipper at X=80..95 (cols 10..11)!
+    #   - Cols 13..15: Right Bottom V-Funnel Wall
     m[1][2] = T["APRON_L"]
     m[1][3] = T["APRON_L"]
     m[1][4] = T["APRON_L"]
+    m[1][5] = T["LOW_ANCHOR_L"]
+    m[1][12] = T["LOW_ANCHOR_R"]
     m[1][13] = T["APRON_R"]
     m[1][14] = T["APRON_R"]
     m[1][15] = T["APRON_R"]
 
-    # Row 0 (world_y = 304..319): Drain Apron Bottom (Center Drain open at cols 7..10)
+    # Row 0 (world_y = 304..319): Bottom V-Funnel Drain Hole (Open at cols 7..10, X=56..87)
     for c in range(2, 7):
         m[0][c] = T["APRON_L"]
     for c in range(11, 16):
@@ -555,53 +589,55 @@ def build_sprites():
     ])
     add_sprite("bumper", [bmp_f0, bmp_f1], 2, used_h=10)
 
-    # 2. Left Flipper (12x12 in 160A = 24x12 TV pixels, 3 bytes wide, 3 frames: Down, Mid, Up) - P1
+    # 2. Left Flipper (16x12 in 160A = 32x12 TV pixels, 4 bytes = 16 pixels wide!
+    #    Spans full 16 pixels from pivot X=0 to tip X=15 so Left & Right flippers
+    #    anchor flush against cols 5 and 12 with ZERO floating gap!) - P1
     flipl_down = art_to_grid([
-        "............",
-        "............",
-        "............",
-        ".333........",
-        "23322.......",
-        "1222322.....",
-        "..1122322...",
-        "....112232..",
-        "......11232.",
-        "........112.",
-        "............",
-        "............",
+        "................",
+        "................",
+        "3333............",
+        "233322..........",
+        "12233322........",
+        ".112233322......",
+        "...112233322....",
+        ".....11223332...",
+        ".......1122332..",
+        ".........112232.",
+        "...........1122.",
+        "................",
     ])
     flipl_mid = art_to_grid([
-        "............",
-        "............",
-        "............",
-        "............",
-        ".333333332..",
-        "23322222232.",
-        "12211111111.",
-        "............",
-        "............",
-        "............",
-        "............",
-        "............",
+        "................",
+        "................",
+        "................",
+        "................",
+        "33333333333332..",
+        "233322222222232.",
+        "122211111111112.",
+        "................",
+        "................",
+        "................",
+        "................",
+        "................",
     ])
     flipl_up = art_to_grid([
-        "........112.",
-        "......11232.",
-        "....112232..",
-        "..1122322...",
-        "1222322.....",
-        "23322.......",
-        ".333........",
-        "............",
-        "............",
-        "............",
-        "............",
-        "............",
+        "...........1122.",
+        ".........112232.",
+        ".......1122332..",
+        ".....11223332...",
+        "...112233322....",
+        ".112233322......",
+        "12233322........",
+        "233322..........",
+        "3333............",
+        "................",
+        "................",
+        "................",
     ])
-    add_sprite("flipl", [flipl_down, flipl_mid, flipl_up], 1, used_h=10)
+    add_sprite("flipl", [flipl_down, flipl_mid, flipl_up], 1, used_h=11)
 
-    # 3. Right Flipper (12x12 in 160A, horizontally mirrored from Left Flipper) - P1
-    add_sprite("flipr", [mirror_h(f) for f in (flipl_down, flipl_mid, flipl_up)], 1, used_h=10)
+    # 3. Right Flipper (16x12 in 160A, 4 bytes = 16 pixels wide, mirrored so right pivot is at X+15!) - P1
+    add_sprite("flipr", [mirror_h(f) for f in (flipl_down, flipl_mid, flipl_up)], 1, used_h=11)
 
     # 4. Spring Plunger (4x12 in 160A, 1 byte wide, 3 compression frames) - P1
     plg_0 = art_to_grid([
@@ -648,24 +684,28 @@ def build_sprites():
     ])
     add_sprite("plunger", [plg_0, plg_1, plg_2], 1, used_h=12)
 
-    # 5. Drop Target / Lock Saucer Gem (4x6 in 160A, 1 byte wide, 2 frames: Active, Hit/Lit) - P5
+    # 5. Center Card / Rollover / Lock Gem (8x8 in 160A, 2 bytes wide, 2 frames: Up Card, Lit/Down) - P5
     gem_0 = art_to_grid([
-        ".22.",
-        "2332",
-        "2332",
-        "2222",
-        "1221",
-        ".11.",
+        ".222222.",
+        "23333332",
+        "23133132",
+        "23113132",
+        "23131132",
+        "23333332",
+        "12222221",
+        ".111111.",
     ])
     gem_1 = art_to_grid([
-        ".33.",
-        "3113",
-        "3113",
-        ".33.",
-        "....",
-        "....",
+        "........",
+        "..2222..",
+        ".233332.",
+        ".231132.",
+        ".233332.",
+        "..2222..",
+        "........",
+        "........",
     ])
-    add_sprite("gem", [gem_0, gem_1], 5, used_h=6)
+    add_sprite("gem", [gem_0, gem_1], 5, used_h=8)
 
     # 6. Whirling Spinner (8x5 in 160A, 2 bytes wide, 2 frames) - P4
     spn_0 = art_to_grid([
@@ -718,8 +758,6 @@ def main():
     ]
     for name, *_ in sprites:
         bas.append(f"  incgraphic gfx/{name}.png 160A 0 1 2 3")
-    # Put a dummy block at $E000 so charset + all gameplay sprites land at $C000
-    # (surrounded by both $B000 and $D000 hardware 16-line DMA holes!)
     save_160a(GFX / "padblock.png", empty_grid(16, 4), 0)
     bas.append("  newblock")
     bas.append("  incgraphic gfx/padblock.png 160A 0 1 2 3")
@@ -730,11 +768,11 @@ def main():
         "title2": "IGNITION  7800",
         "press": "PULL DOWN TO LAUNCH",
         "multiball": "MULTI-BALL MANIA!",
-        "jackpot": "SUPER JACKPOT!",
+        "jackpot": "LOCK LIT! SHOOT TOP",
         "lock1": "BALL 1 LOCKED!",
         "lock2": "READY MULTI-BALL!",
-        "ramp": "HYPER RAMP 10000!",
-        "skill": "SKILL SHOT 5000!",
+        "ramp": "ORBIT LOOP 10000!",
+        "skill": "SKILL BONUS 5000!",
         "gameover": "GAME OVER",
     }
 

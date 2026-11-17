@@ -1,5 +1,6 @@
 ; ===========================================================================
 ; Super Mega Pinball 7800 - Physics, CORDIC Collision & Multi-Ball Engine
+; Inspired by NES Pinball & Pinball Dreams (Two-Tier Flippers & Side Channels)
 ; Powered by the AstroCart FPGA MathUnit & CORDIC Co-Processor ($0420-$043F)
 ; ===========================================================================
 
@@ -23,25 +24,26 @@ M_R     = $0438
 M_RND   = $043E
 
 ; Physics Constants (8.8 fixed-point: $0100 = 1.0 pixel/frame)
-GRAVITY_ACC     = $0007     ; Authentic pinball table slope gravity per 60Hz frame
+GRAVITY_ACC     = $0008     ; Crisp pinball table slope gravity per 60Hz frame
 MAX_BALL_VHI    = $04       ; Clamp velocity magnitude to +/- 4.5 px/frame ($0480)
 MAX_BALL_VLO    = $80
 MAX_BALLS       = 3         ; Up to 3 simultaneous steel pinballs in Multi-Ball!
+NUM_BUMPERS     = 4         ; 1 Upper Bumper (68,68) + 3 Lower Bumpers (48,206), (92,206), (70,226)
 
 ; Game State RAM ($2300 - $237F)
 pb_state        = $2300     ; 0 = Attract/Title, 1 = Playing, 2 = Game Over
 pb_balls_left   = $2301     ; Balls remaining (3..1)
 pb_mult         = $2302     ; Playfield bonus multiplier (1, 2, 3, 5)
-pb_locks        = $2303     ; Multi-ball locks charged (0, 1, 2 -> 3 triggers Multi-Ball!)
+pb_locks        = $2303     ; Multi-ball locks charged (0, 1 -> 2 triggers Multi-Ball!)
 pb_rollovers    = $2304     ; Bitmask (bits 0..2) of Top Rollover Lanes (I-G-N)
-pb_drops        = $2305     ; Bitmask (bits 0..2) of Left Drop Targets (M-E-G)
+pb_drops        = $2305     ; Bitmask (bits 0..3) of 4 Center Card Targets ($0F = all 4 hit -> lights Lock!)
 pb_plunger      = $2306     ; Plunger pull-back tension (0..48)
-pb_flipl        = $2307     ; Left Flipper state (0=Down, 1=Mid, 2=Up)
-pb_flipr        = $2308     ; Right Flipper state (0=Down, 1=Mid, 2=Up)
-pb_flipl_vel    = $2309     ; Left Flipper upward swing impulse frames
-pb_flipr_vel    = $230A     ; Right Flipper upward swing impulse frames
+pb_flipl        = $2307     ; Left Flippers state (0=Down, 1=Mid, 2=Up)
+pb_flipr        = $2308     ; Right Flippers state (0=Down, 1=Mid, 2=Up)
+pb_flipl_vel    = $2309     ; Left Flippers upward swing impulse frames
+pb_flipr_vel    = $230A     ; Right Flippers upward swing impulse frames
 pb_spinner      = $230B     ; Spinner whirl timer
-pb_banner_id    = $230C     ; Active DMD/playfield banner text ID (TXT_*)
+pb_banner_id    = $230C     ; Active playfield banner text ID (TXT_*)
 pb_banner_tmr   = $230D     ; Active banner timer (0 = none)
 pb_frame        = $230E     ; Global 60Hz frame counter
 pb_active_cnt   = $230F     ; Count of currently active balls on playfield (1..3)
@@ -57,25 +59,25 @@ ball_vxl        = $2322     ; [3] VX low byte (signed 8.8)
 ball_vxh        = $2325     ; [3] VX high byte
 ball_vyl        = $2328     ; [3] VY low byte (signed 8.8)
 ball_vyh        = $232B     ; [3] VY high byte
-ball_cd         = $232E     ; [3] Per-ball bumper/target cooldown (prevents double-trigger)
+ball_cd         = $232E     ; [3] Per-ball bumper/target cooldown
 
-bmp_flash       = $2331     ; [3] Pop bumper flash timers (0..2)
-pb_score        = $2334     ; [7] 7-digit ASCII score in 0..9 ($2334 = millions .. $233A = ones)
-pb_saver        = $233B     ; Ball saver timer after launch / multi-ball start
-pb_tmp0         = $233C
-pb_tmp1         = $233D
-pb_tmp2         = $233E
-pb_tmp3         = $233F
+bmp_flash       = $2331     ; [4] Pop bumper flash timers (0..3) ($2331-$2334)
+pb_score        = $2335     ; [7] 7-digit score in 0..9 ($2335 = millions .. $233B = ones)
+pb_lock_lit     = $233C     ; 1 = Upper-Right Lock Chute is LIT (after clearing all 4 Center Cards!)
+pb_tmp0         = $233D
+pb_tmp1         = $233E
+pb_tmp2         = $233F
 pb_joy_l        = $2340     ; Input: Left flipper held (0/1)
 pb_joy_r        = $2341     ; Input: Right flipper held (0/1)
 pb_joy_d        = $2342     ; Input: Down (plunger pull) held (0/1)
+pb_tmp3         = $2343
 
 ; ---------------------------------------------------------------------------
 ; pinball_init: Initialize entire machine on boot
 ; ---------------------------------------------------------------------------
 pinball_init
     lda #1
-    sta M_SIGN              ; Enable signed arithmetic on AstroCart MathUnit
+    sta M_SIGN
     jsr sound_init
     lda #0
     sta pb_state
@@ -97,6 +99,7 @@ match_init
     sta pb_balls_left
     lda #0
     sta pb_locks
+    sta pb_lock_lit
     sta pb_rollovers
     sta pb_drops
     sta pb_plunger
@@ -126,6 +129,7 @@ spawn_plunger_ball
     sta bmp_flash
     sta bmp_flash+1
     sta bmp_flash+2
+    sta bmp_flash+3
 
     lda #1
     sta ball_act
@@ -148,13 +152,10 @@ spawn_plunger_ball
     sta pb_banner_id
     lda #90
     sta pb_banner_tmr
-    lda #180                ; 3-second ball saver once launched
-    sta pb_saver
     rts
 
 ; ---------------------------------------------------------------------------
-; add_score_k: Add A * 100 * pb_mult points to the 7-digit score
-;   pb_score[0..6] = [M, 100K, 10K, 1K, 100, 10, 1]
+; add_score_100: Add A * 100 * pb_mult points to the 7-digit score
 ; ---------------------------------------------------------------------------
 add_score_100
     sta M_A
@@ -164,9 +165,9 @@ add_score_100
     sta M_B
     lda #0
     sta M_B+1
-    lda M_P                 ; Total hundreds to add (up to 250)
+    lda M_P
     clc
-    adc pb_score+4          ; Hundreds digit
+    adc pb_score+4
     sta M_N
     lda M_P+1
     adc #0
@@ -179,9 +180,8 @@ add_score_100
     lda #0
     sta M_D+1
     lda M_R
-    sta pb_score+4          ; Remainder = new hundreds digit
+    sta pb_score+4
 
-    ; Propagate carry M_Q up through 1K, 10K, 100K, 1M digits
     ldx #3
 .score_prop
     lda M_Q
@@ -206,7 +206,7 @@ update_hud_digits
     ldx #6
 .uh_score
     lda pb_score,x
-    asl                     ; font index = 2 * digit
+    asl
     sta hudtext,x
     dex
     bpl .uh_score
@@ -231,7 +231,7 @@ pinball_step
     inc pb_frame
     lda #1
     sta M_SIGN
-    lda M_RND               ; Step hardware PRNG every frame
+    lda M_RND
 
     jsr sound_update
 
@@ -240,11 +240,7 @@ pinball_step
     beq .no_bnr
     dec pb_banner_tmr
 .no_bnr
-    lda pb_saver
-    beq .no_sav
-    dec pb_saver
-.no_sav
-    ldx #2
+    ldx #3
 .dec_bmp
     lda bmp_flash,x
     beq .next_bmp
@@ -259,15 +255,17 @@ pinball_step
     dec pb_spinner
     and #3
     bne .no_spn
-    lda #2                  ; +200 pts per spin tick
+    lda #2
     jsr add_score_100
     lda #SFX_SPINNER
     jsr sound_play_ch0
 .no_spn
 
-    ; 1. Update Left Flipper (pb_joy_l)
-    lda #0
-    sta pb_flipl_vel
+    ; 1. Update Left Flippers (Upper & Lower)
+    lda lb_flipl_decay
+    beq .chk_flipl_in
+    dec pb_flipl_vel
+.chk_flipl_in
     lda pb_joy_l
     beq .flipl_rel
     lda pb_flipl
@@ -278,18 +276,22 @@ pinball_step
     jsr sound_play_ch0
 .flipl_up1
     inc pb_flipl
-    lda #2
-    sta pb_flipl_vel        ; Active upward swing impulse!
+    lda #4                  ; 4-frame active upward swing window!
+    sta pb_flipl_vel
     jmp .flipl_done
 .flipl_rel
+    lda #0
+    sta pb_flipl_vel
     lda pb_flipl
     beq .flipl_done
     dec pb_flipl
 .flipl_done
 
-    ; 2. Update Right Flipper (pb_joy_r)
-    lda #0
-    sta pb_flipr_vel
+    ; 2. Update Right Flippers (Upper & Lower)
+    lda pb_flipr_vel
+    beq .chk_flipr_in
+    dec pb_flipr_vel
+.chk_flipr_in
     lda pb_joy_r
     beq .flipr_rel
     lda pb_flipr
@@ -300,10 +302,12 @@ pinball_step
     jsr sound_play_ch0
 .flipr_up1
     inc pb_flipr
-    lda #2
-    sta pb_flipr_vel        ; Active upward swing impulse!
+    lda #4                  ; 4-frame active upward swing window!
+    sta pb_flipr_vel
     jmp .flipr_done
 .flipr_rel
+    lda #0
+    sta pb_flipr_vel
     lda pb_flipr
     beq .flipr_done
     dec pb_flipr
@@ -317,7 +321,6 @@ pinball_step
     bcs .plunger_hold_ball
     inc pb_plunger
 .plunger_hold_ball
-    ; If Ball 0 is in shooter lane at bottom, move it down with plunger spring
     lda ball_xi
     cmp #132
     bcc .plg_done_jmp
@@ -341,7 +344,7 @@ pinball_step
     beq .plunger_done
     cmp #4
     bcc .plunger_zero
-    ; Launch ball in shooter lane! VY = -($0220 + pb_plunger * 12)
+    ; Launch ball in shooter lane! VY = -($0240 + pb_plunger * 12)
     lda ball_xi
     cmp #132
     bcc .plunger_zero
@@ -357,12 +360,11 @@ pinball_step
     sta M_B+1
     clc
     lda M_P
-    adc #$20
+    adc #$40
     sta pb_tmp0
     lda M_P+1
     adc #$02
     sta pb_tmp1
-    ; Add small random jitter from M_RND so launches are never identical
     lda M_RND
     and #$1F
     clc
@@ -383,8 +385,6 @@ pinball_step
     sta ball_vxh
     lda #SFX_LAUNCH
     jsr sound_play_ch0
-    lda #180
-    sta pb_saver
 .plunger_zero
     lda #0
     sta pb_plunger
@@ -406,16 +406,11 @@ pinball_step
     cpx #MAX_BALLS
     bcc .ball_loop
 
-    ; Check if all balls drained
+    ; Check if all balls drained!
     lda pb_active_cnt
     bne .update_cam
-    ; If Ball Saver active, relaunch immediately without losing a ball!
-    lda pb_saver
-    beq .lose_ball
-    jsr spawn_plunger_ball
-    jmp .update_cam
 
-.lose_ball
+    ; All active balls drained -> lose a ball!
     lda #SFX_DRAIN
     jsr sound_play_ch1
     dec pb_balls_left
@@ -435,10 +430,9 @@ pinball_step
 
 .update_cam
     ; 5. Smooth Camera Vertical Tracking (cam_y in 0..111 follows lowest active ball)
-    ;    Find highest Y (lowest on table) among active balls
     lda #0
-    sta pb_tmp0             ; low byte of max ball Y
-    sta pb_tmp1             ; high byte of max ball Y
+    sta pb_tmp0
+    sta pb_tmp1
     ldx #0
 .cam_find
     lda ball_act,x
@@ -496,7 +490,7 @@ pinball_step
     sta cam_y
     jmp .cam_done
 .cam_step_up
-    cmp #$FC                ; >= -4?
+    cmp #$FC
     bcs .cam_snap
     lda cam_y
     sec
@@ -510,8 +504,10 @@ pinball_step
     jsr update_hud_digits
     rts
 
+lb_flipl_decay = pb_flipl_vel
+
 ; ===========================================================================
-; update_single_ball: Physics, Gravity, Walls, Flippers & Table Features (X=0..2)
+; update_single_ball: Physics, Side Channels, Upper/Lower Flippers & Drain
 ; ===========================================================================
 update_single_ball
     lda ball_cd,x
@@ -528,7 +524,6 @@ update_single_ball
     lda ball_yl,x
     cmp #<282
     bcc .apply_grav
-    ; Resting on plunger at Y >= 282 in shooter lane
     lda ball_vyh,x
     bmi .apply_grav
     lda pb_plunger
@@ -637,7 +632,7 @@ update_single_ball
     adc ball_yh,x
     sta ball_yh,x
 
-    ; 5. Top Orbital Arch & Shooter Lane Curve (Y < 32, ball_yh == 0)
+    ; 5. Top Orbital Arch & Shooter Lane Exit Curve (Y < 34, ball_yh == 0)
     lda ball_yh,x
     bne .not_top_arch
     lda ball_yl,x
@@ -645,38 +640,54 @@ update_single_ball
     bcs .check_arch_curve
     lda #16
     sta ball_yl,x
-    ; Bounce downward off top arch roof and curve left if in right half
     lda #$80
     sta ball_vyl,x
     lda #$00
     sta ball_vyh,x
     lda ball_xi,x
     cmp #100
-    bcc .not_top_arch
-    ; Launched up shooter lane into top arch: kick left across top rollover lanes!
+    bcc .chk_left_orbit_top
+    ; Launched up shooter lane into top arch: curve left across rollover lanes!
     lda M_RND
-    and #$3F
+    and #$7F
     clc
-    adc #$C0
+    adc #$A0
     sta ball_vxl,x
-    lda #$FD                ; VX ~ -$0200..-0240 left!
+    lda #$FD                ; VX ~ -$01E0..-$0260 left
     sta ball_vxh,x
+    jmp .not_top_arch
+.chk_left_orbit_top
+    cmp #32
+    bcs .not_top_arch
+    ; Shot up the Left Side Orbit Channel into the top arch! Curve right (+10,000 Orbit Bonus!)
+    lda #$20
+    sta ball_vxl,x
+    lda #$02
+    sta ball_vxh,x
+    lda #100
+    jsr add_score_100
+    lda #TXT_RAMP
+    sta pb_banner_id
+    lda #70
+    sta pb_banner_tmr
+    lda #SFX_RAMP
+    jsr sound_play_ch1
+    ldx pb_tmp3
     jmp .not_top_arch
 
 .check_arch_curve
-    cmp #36
+    cmp #34
     bcs .not_top_arch
     lda ball_xi,x
     cmp #132
     bcc .not_top_arch
-    ; In upper shooter curve (Y = 16..35, X >= 132): deflect smoothly left into playfield!
     lda #$E0
     sta ball_vxl,x
-    lda #$FD                ; VX = -$0220
+    lda #$FD
     sta ball_vxh,x
 
 .not_top_arch
-    ; 6. Left & Right Outer Walls + Plunger Divider Wall
+    ; 6. Outer Left & Right Walls + Plunger Divider Wall
     lda ball_xi,x
     cmp #17
     bcs .chk_right_walls
@@ -686,7 +697,6 @@ update_single_ball
     jmp .done_x_walls
 
 .chk_right_walls
-    ; Is ball in shooter lane (X >= 132)?
     cmp #132
     bcc .in_main_playfield
     cmp #140
@@ -696,7 +706,6 @@ update_single_ball
     jsr negate_damp_vx
     jmp .done_x_walls
 .chk_shooter_div
-    ; In shooter lane: if Y >= 44, keep X >= 135 against divider wall
     lda ball_yh,x
     bne .clamp_shooter_l
     lda ball_yl,x
@@ -712,7 +721,6 @@ update_single_ball
     jmp .done_x_walls
 
 .in_main_playfield
-    ; Main playfield right wall is at X = 123 (one-way gate prevents re-entering shooter lane)
     cmp #123
     bcc .done_x_walls
     lda #123
@@ -720,33 +728,37 @@ update_single_ball
     jsr negate_damp_vx
 .done_x_walls
 
-    ; 7. Check Upper vs Lower Table Features by ball_yh (0 = Y < 256, 1 = Y >= 256)
+    ; 7. Dispatch Upper/Mid Playfield (Y < 256) vs Lower Playfield (Y >= 256)
     lda ball_yh,x
     beq .upper_table_checks
     jmp .lower_table_checks
 
 ; ---------------------------------------------------------------------------
-; Upper & Mid Playfield Collisions (Y = 0..255, ball_yh == 0)
+; Upper & Mid Playfield: Channels, Islands, Upper Flippers, Cards & Bumpers
 ; ---------------------------------------------------------------------------
 .upper_table_checks
-    ; Skip playfield obstacle checks while ball is ascending in shooter lane (X >= 132)
+    ; Skip playfield checks while ball is ascending in shooter lane (X >= 132)
     lda ball_xi,x
     cmp #132
     bcc .in_upper_playfield
     rts
 .in_upper_playfield
-    ; A. Top Rollover Lanes (I - G - N) at Y = 36..44
+
+    ; A. Top Rollover Lanes (I - G - N) at Y = 34..46, X = 34..106
     lda ball_yl,x
-    cmp #36
-    bcc .chk_bumpers
-    cmp #44
-    bcs .chk_bumpers
+    cmp #34
+    bcc .chk_side_channels
+    cmp #46
+    bcs .chk_side_channels
+    lda ball_xi,x
+    cmp #34
+    bcc .chk_side_channels
     lda ball_cd,x
-    bne .chk_bumpers
+    bne .chk_side_channels
     lda ball_xi,x
     cmp #56
     bcc .roll_0
-    cmp #84
+    cmp #80
     bcc .roll_1
     lda #4
     bne .roll_hit
@@ -758,23 +770,22 @@ update_single_ball
 .roll_hit
     ora pb_rollovers
     cmp pb_rollovers
-    beq .chk_bumpers
+    beq .chk_side_channels
     sta pb_rollovers
     lda #12
     sta ball_cd,x
-    lda #5                  ; +500 pts per new rollover lane
+    lda #5
     jsr add_score_100
     ldx pb_tmp3
     lda #SFX_TARGET
     jsr sound_play_ch1
     ldx pb_tmp3
-    ; All 3 rollovers lit (I-G-N == 7)? Advance Bonus Multiplier (1X -> 2X -> 3X -> 5X)!
     lda pb_rollovers
     cmp #7
-    bne .chk_bumpers
+    bne .chk_side_channels
     lda #0
     sta pb_rollovers
-    lda #50                 ; +5,000 Skill/Rollover Bonus!
+    lda #50
     jsr add_score_100
     ldx pb_tmp3
     lda #TXT_SKILL
@@ -783,28 +794,319 @@ update_single_ball
     sta pb_banner_tmr
     lda pb_mult
     cmp #5
-    bcs .chk_bumpers
+    bcs .chk_side_channels
     inc pb_mult
     lda pb_mult
     cmp #4
-    bne .chk_bumpers
-    inc pb_mult             ; 3X -> 5X
+    bne .chk_side_channels
+    inc pb_mult
 
-.chk_bumpers
-    ; B. 3 Neon Pop Bumpers at (48, 72), (88, 72), (68, 102) using CORDIC!
+.jmp_chk_upper_flippers
+    jmp .chk_upper_flippers
+.jmp_chk_center_cards
+    jmp .chk_center_cards
+
+.chk_side_channels
+    ; B. Walled Side Channels & Upper-Tier Islands (Y = 48..158):
+    ;    1. Left Side Bypass / Orbit Channel (col 2, X = 17..23) separated from
+    ;       main arena by Left Channel Wall / Island (cols 3..4, X = 24..39)!
     lda ball_yl,x
-    cmp #56
-    bcc .jmp_mid_feat
-    cmp #120
-    bcc .do_bmp_scan
-.jmp_mid_feat
-    jmp .chk_mid_features
-.do_bmp_scan
+    cmp #48
+    bcc .jmp_chk_upper_flippers
+    cmp #158
+    bcs .jmp_chk_center_cards
 
-    ldy #2
+    lda ball_xi,x
+    cmp #24
+    bcs .chk_left_island_inner
+    ; Ball is INSIDE the Left Side Bypass Channel (X = 17..23)!
+    ; Keep it guided inside the channel (X <= 22) as it shoots up or drops down!
+    cmp #22
+    bcc .jmp_chk_upper_flippers
+    lda #22
+    sta ball_xi,x
+    jsr negate_damp_vx
+    jmp .chk_upper_flippers
+
+.chk_left_island_inner
+    ; At Y = 96..140, the Left Island occupies X = 24..39, funneling main-arena balls to X >= 40!
+    lda ball_yl,x
+    cmp #96
+    bcc .chk_upper_right_chute
+    cmp #140
+    bcs .jmp_chk_upper_flippers
+    lda ball_xi,x
+    cmp #40
+    bcs .chk_right_island_inner
+    lda #40
+    sta ball_xi,x
+    jsr negate_damp_vx
+    jmp .chk_upper_flippers
+
+.chk_right_island_inner
+    ; At Y = 96..140, the Right Island occupies X = 104..118, funneling balls to X <= 103 (or right channel >= 119)
+    cmp #104
+    bcc .chk_upper_flippers
+    cmp #118
+    bcs .chk_upper_flippers
+    lda #103
+    sta ball_xi,x
+    jsr negate_damp_vx
+    jmp .chk_upper_flippers
+
+.chk_upper_right_chute
+    ; Left orbit channel inner wall (col 3, X = 24..31) at Y = 48..95
+    lda ball_xi,x
+    cmp #32
+    bcs .chk_lock_chute_x
+    lda #32
+    sta ball_xi,x
+    jsr negate_damp_vx
+    jmp .chk_upper_flippers
+.chk_lock_chute_x
+    ; 2. Upper-Right Green Multi-Ball Lock Chute (Y = 48..95, X = 102..120, walled on left at X = 96..101)
+    lda ball_xi,x
+    cmp #96
+    bcc .chk_upper_flippers
+    cmp #102
+    bcs .in_lock_chute
+    ; Bounce off left wall of Lock Chute (X = 95)
+    lda #95
+    sta ball_xi,x
+    jsr negate_damp_vx
+    jmp .chk_upper_flippers
+
+.in_lock_chute
+    ; Inside the Upper-Right Green Lock Chute!
+    lda ball_cd,x
+    bne .chk_upper_flippers
+    lda #24
+    sta ball_cd,x
+    ; Eject ball downward out of the chute
+    lda #$20
+    sta ball_vyl,x
+    lda #$01
+    sta ball_vyh,x
+    lda #$C0
+    sta ball_vxl,x
+    lda #$FF
+    sta ball_vxh,x
+    ; Is Lock Lit (all 4 Center Cards knocked down)?
+    lda pb_lock_lit
+    beq .chute_bonus_only
+    jsr advance_multiball_lock
+    ldx pb_tmp3
+    rts
+.chute_bonus_only
+    lda #15                 ; +1,500 Chute Bonus when Lock not yet lit
+    jsr add_score_100
+    lda #SFX_TARGET
+    jsr sound_play_ch1
+    ldx pb_tmp3
+
+.jmp_chk_center_cards2
+    jmp .chk_center_cards
+
+.chk_upper_flippers
+    ; C. Upper Pair of Flippers at Y = 126..142 (Left: X = 40..55, Right: X = 88..103)
+    lda ball_yl,x
+    cmp #126
+    bcc .jmp_chk_center_cards2
+    cmp #142
+    bcs .jmp_chk_center_cards2
+
+    ; Upper flippers only catch balls falling onto them (shots from below pass up through)
+    lda ball_vyh,x
+    bmi .jmp_chk_center_cards2
+    lda ball_xi,x
+    cmp #40
+    bcc .jmp_chk_center_cards2
+    cmp #56
+    bcc .hit_upper_flipl
+    cmp #88
+    bcc .jmp_chk_center_cards2
+    cmp #104
+    bcs .jmp_chk_center_cards2
+
+    ; Upper Right Flipper (X = 88..103)
+    lda #103
+    sec
+    sbc ball_xi,x
+    sta pb_tmp0             ; d = 0..15
+    lda #128
+    sta ball_yl,x
+    lda pb_flipr_vel
+    bne .up_flipr_shot
+    lda ball_vyh,x
+    bmi .jmp_chk_center_cards2
+    ; Unpressed upper right flipper: slide down-left into mid arena!
+    lda #$60
+    sta ball_vyl,x
+    lda #$00
+    sta ball_vyh,x
+    lda #$60
+    sta ball_vxl,x
+    lda #$FF
+    sta ball_vxh,x
+    rts
+.up_flipr_shot
+    lda pb_tmp0
+    asl
+    sta pb_tmp1
+    lda #$CE
+    sec
+    sbc pb_tmp1
+    sta pb_tmp1
+    jmp .flipper_cordic_launch
+
+.hit_upper_flipl
+    ; Upper Left Flipper (X = 40..55)
+    sec
+    sbc #40
+    sta pb_tmp0             ; d = 0..15
+    lda #128
+    sta ball_yl,x
+    lda pb_flipl_vel
+    bne .up_flipl_shot
+    lda ball_vyh,x
+    bmi .jmp_chk_center_cards2
+    ; Unpressed upper left flipper: slide down-right into mid arena!
+    lda #$60
+    sta ball_vyl,x
+    lda #$00
+    sta ball_vyh,x
+    lda #$A0
+    sta ball_vxl,x
+    lda #$00
+    sta ball_vxh,x
+    rts
+.up_flipl_shot
+    lda pb_tmp0
+    asl
+    clc
+    adc #$B2
+    sta pb_tmp1
+    jmp .flipper_cordic_launch
+
+.jmp_chk_all_bumpers
+    jmp .chk_all_bumpers
+
+.chk_center_cards
+    ; D. 4 Emerald Center Card Targets (I - G - N - T) at Y = 160..174, X = 38..102
+    lda ball_yl,x
+    cmp #160
+    bcc .jmp_chk_all_bumpers
+    cmp #174
+    bcs .chk_side_specials
+    lda ball_cd,x
+    bne .jmp_chk_all_bumpers
+    lda ball_xi,x
+    cmp #38
+    bcc .jmp_chk_all_bumpers
+    cmp #102
+    bcs .jmp_chk_all_bumpers
+
+    ; Map X (38..101) to card index 0..3 (every 16 pixels)
+    sec
+    sbc #38
+    lsr
+    lsr
+    lsr
+    lsr
+    tay                     ; Y = 0..3
+    lda bit_mask_tbl,y
+    ora pb_drops
+    cmp pb_drops
+    beq .jmp_chk_all_bumpers    ; That card is already knocked down!
+    sta pb_drops
+    ; Bounce ball vertically off the card target
+    sec
+    lda #0
+    sbc ball_vyl,x
+    sta ball_vyl,x
+    lda #0
+    sbc ball_vyh,x
+    sta ball_vyh,x
+    lda #10
+    sta ball_cd,x
+    lda #10                 ; +1,000 pts per card
+    jsr add_score_100
+    lda #SFX_TARGET
+    jsr sound_play_ch1
+    ldx pb_tmp3
+
+    ; Did the player knock down all 4 Center Cards (pb_drops == $0F)?
+    lda pb_drops
+    cmp #$0F
+    bne .jmp_chk_all_bumpers
+    lda #1
+    sta pb_lock_lit         ; Light the Upper-Right Multi-Ball Lock Chute!
+    lda #TXT_JACKPOT        ; "LOCK LIT! SHOOT TOP"
+    sta pb_banner_id
+    lda #90
+    sta pb_banner_tmr
+    lda #SFX_LOCK
+    jsr sound_play_ch1
+    ldx pb_tmp3
+
+.chk_side_specials
+    ; E. Left Side Target Bank (X < 26, Y = 180..224) & Right Side Pink Spinner Gate (X > 114, Y = 180..224)
+    lda ball_yl,x
+    cmp #180
+    bcc .chk_all_bumpers
+    cmp #224
+    bcs .chk_all_bumpers
+    lda ball_xi,x
+    cmp #26
+    bcc .hit_left_bank
+    cmp #114
+    bcc .chk_all_bumpers
+    ; Right Side Spinner Gate!
+    lda ball_cd,x
+    bne .chk_all_bumpers
+    lda #14
+    sta ball_cd,x
+    lda #28
+    sta pb_spinner
+    lda #SFX_SPINNER
+    jsr sound_play_ch0
+    ldx pb_tmp3
+    jmp .chk_all_bumpers
+
+.hit_left_bank
+    lda #26
+    sta ball_xi,x
+    lda #$A0
+    sta ball_vxl,x
+    lda #$01
+    sta ball_vxh,x
+    lda #5
+    jsr add_score_100
+    lda #SFX_TARGET
+    jsr sound_play_ch1
+    ldx pb_tmp3
+
+.chk_all_bumpers
+    ; F. 4 Neon Pop Bumpers via CORDIC:
+    ;    Bumper 0: Upper Center (68, 68)
+    ;    Bumpers 1..3: Lower Triangle (48, 204), (92, 204), (70, 224)
+    ldy #NUM_BUMPERS-1
 .bmp_loop
     sty pb_tmp2
-    ; Compute (ball_x - bmp_x) * 256 -> M_X and (ball_y - bmp_y) * 256 -> M_Y
+    lda ball_yl,x
+    sec
+    sbc bmp_y_tbl,y
+    sta M_Y+1
+    ; Quick vertical range filter (+/- 14 scanlines) before CORDIC read
+    bpl .dy_pos
+    cmp #$F2
+    bcc .jmp_bmp_next
+    bcs .do_bmp_cordic
+.dy_pos
+    cmp #14
+    bcs .jmp_bmp_next
+
+.do_bmp_cordic
     lda #0
     sta M_X
     sta M_Y
@@ -812,14 +1114,13 @@ update_single_ball
     sec
     sbc bmp_x_tbl,y
     sta M_X+1
-    lda ball_yl,x
-    sec
-    sbc bmp_y_tbl,y
-    sta M_Y+1
 
     lda M_LEN+1
-    cmp #10                 ; Hit radius = 10 pixels
-    bcs .bmp_next
+    cmp #10
+    bcc .bmp_hit
+.jmp_bmp_next
+    jmp .bmp_next
+.bmp_hit
 
     ; CORDIC Radial Rebound: rotate kick speed ($0260) by outward normal M_ANG!
     lda M_ANG
@@ -847,7 +1148,6 @@ update_single_ball
     lda M_YR+1
     sta ball_vyh,x
 
-    ; Push ball outside bumper radius along normal
     clc
     lda ball_xi,x
     adc M_XR+1
@@ -864,7 +1164,7 @@ update_single_ball
     sta bmp_flash,y
     lda #8
     sta ball_cd,x
-    lda #10                 ; +1,000 pts * multiplier!
+    lda #10
     jsr add_score_100
     lda #SFX_BUMPER
     jsr sound_play_ch1
@@ -874,199 +1174,88 @@ update_single_ball
 .bmp_next
     ldy pb_tmp2
     dey
-    bmi .chk_mid_features
+    bmi .chk_lower_channels_top
     jmp .bmp_loop
 
-.chk_mid_features
-    ; C. Left "HYPER RAMP" Chute (X = 16..34, Y = 140..172 moving upward)
-    lda ball_yl,x
-    cmp #140
-    bcc .chk_core_lock
-    cmp #172
-    bcc .in_mid_y
-    jmp .chk_drop_targets
-.in_mid_y
-    lda ball_xi,x
-    cmp #34
-    bcs .chk_warp_spinner
-    ; Inside Left Hyper Ramp entrance! If moving upward (vyh < 0), launch up ramp to top loop!
-    lda ball_vyh,x
-    bpl .chk_core_lock
-    lda #24
-    sta ball_xi,x
-    lda #24
-    sta ball_yl,x
-    lda #$20
-    sta ball_vxl,x
-    lda #$02                ; Exit top loop moving right (+2.1 px/frame)
-    sta ball_vxh,x
-    lda #$40
-    sta ball_vyl,x
-    lda #$00
-    sta ball_vyh,x
-    lda #100                ; +10,000 Ramp Bonus!
-    jsr add_score_100
-    lda #TXT_RAMP
-    sta pb_banner_id
-    lda #75
-    sta pb_banner_tmr
-    lda #SFX_RAMP
-    jsr sound_play_ch1
-    ldx pb_tmp3
-    rts
-
-.chk_warp_spinner
-    ; D. Right "WARP CHUTE" & Whirling Spinner (X = 104..123, Y = 140..168)
-    cmp #104
-    bcc .chk_core_lock
-    lda ball_cd,x
-    bne .chk_core_lock
-    lda #14
-    sta ball_cd,x
-    lda #32
-    sta pb_spinner          ; Spin the Warp Spinner for 32 frames!
-    lda #SFX_SPINNER
-    jsr sound_play_ch0
-    ldx pb_tmp3
-
-.chk_core_lock
-    ; E. Center "IGNITION CORE" Multi-Ball Lock Saucer at (72, 140) via CORDIC!
-    lda ball_yl,x
-    cmp #126
-    bcc .upper_done
-    cmp #156
-    bcs .chk_drop_targets
-    lda ball_cd,x
-    bne .upper_done
-
-    lda #0
-    sta M_X
-    sta M_Y
-    lda ball_xi,x
-    sec
-    sbc #72
-    sta M_X+1
-    lda ball_yl,x
-    sec
-    sbc #140
-    sta M_Y+1
-    lda M_LEN+1
-    cmp #10
-    bcs .upper_done
-
-    ; Hit the Center Ignition Core! Bounce radially via CORDIC and advance Multi-Ball Lock!
-    lda M_ANG+1
-    sta pb_tmp1
-    lda #$40
-    sta M_X
-    lda #$02
-    sta M_X+1
-    lda #0
-    sta M_Y
-    sta M_Y+1
-    sta M_T
-    lda pb_tmp1
-    sta M_T+1
-    lda M_XR
-    sta ball_vxl,x
-    lda M_XR+1
-    sta ball_vxh,x
-    lda M_YR
-    sta ball_vyl,x
-    lda M_YR+1
-    sta ball_vyh,x
-    lda #18
-    sta ball_cd,x
-    jsr advance_multiball_lock
-    ldx pb_tmp3
-.upper_done
-    rts
-
-.chk_drop_targets
-    ; F. 3 Emerald Drop Targets (M - E - G) on Left Bank (X < 28, Y = 176..223)
-    lda ball_yl,x
-    cmp #176
-    bcc .upper_done
-    cmp #224
-    bcs .chk_slingshots_upper
-    lda ball_xi,x
-    cmp #28
-    bcs .upper_done
-    lda ball_cd,x
-    bne .upper_done
-
-    ; Determine which of the 3 targets (0, 1, 2) was hit
-    lda ball_yl,x
-    cmp #192
-    bcc .drop_0
-    cmp #208
-    bcc .drop_1
-    lda #4
-    bne .drop_check
-.drop_0
-    lda #1
-    bne .drop_check
-.drop_1
-    lda #2
-.drop_check
-    ora pb_drops
-    cmp pb_drops
-    beq .upper_done         ; Already knocked down
-    sta pb_drops
-    ; Bounce ball right off the drop target
-    lda #$C0
-    sta ball_vxl,x
-    lda #$01
-    sta ball_vxh,x
-    lda #12
-    sta ball_cd,x
-    lda #10                 ; +1,000 pts
-    jsr add_score_100
-    lda #SFX_TARGET
-    jsr sound_play_ch1
-    ; All 3 Drop Targets knocked down? Reset bank & advance Multi-Ball Lock!
-    lda pb_drops
-    cmp #7
-    bne .drop_done
-    lda #0
-    sta pb_drops
-    jsr advance_multiball_lock
-.drop_done
-    ldx pb_tmp3
-    rts
-
-.chk_slingshots_upper
-    ; G. Left & Right Neon Magenta Slingshot Kickers (Y = 232..255)
+.chk_lower_channels_top
+    ; G. Upper Entry of Lower Inlane/Outlane Channels & Slingshots (Y = 232..255):
+    ;    - Left Outlane (X = 17..24) walled on right by Divider Post (col 3, X = 25..31)
+    ;    - Left Inlane (X = 32..39) + Left Slingshot Kicker (X = 40..48)
+    ;    - Right Slingshot Kicker (X = 96..104) + Right Inlane (X = 105..112)
+    ;    - Right Outlane (X = 119..123) walled on left by Divider Post (col 14, X = 113..118)
     lda ball_yl,x
     cmp #232
-    bcc .upper_done
+    bcc .upper_ret
     lda ball_xi,x
-    cmp #46
+    cmp #25
+    bcc .in_left_outlane_u
+    cmp #32
+    bcc .hit_left_div_u
+    cmp #48
     bcc .hit_sling_l
-    cmp #94
-    bcs .hit_sling_r
-    rts
-.hit_sling_l
-    lda #46
+    cmp #96
+    bcc .upper_ret
+    cmp #105
+    bcc .hit_sling_r
+    cmp #113
+    bcc .upper_ret
+    cmp #119
+    bcc .hit_right_div_u
+    ; In Right Outlane (X = 119..123): trap ball in right outlane channel!
+    lda #121
     sta ball_xi,x
-    lda #$20
+    lda #0
     sta ball_vxl,x
-    lda #$02                ; Kick right & up!
+    sta ball_vxh,x
+.upper_ret
+    rts
+
+.in_left_outlane_u
+    ; In Left Outlane (X = 17..24): trap ball in left outlane channel!
+    lda #20
+    sta ball_xi,x
+    lda #0
+    sta ball_vxl,x
+    sta ball_vxh,x
+    rts
+
+.hit_left_div_u
+    lda #32
+    sta ball_xi,x
+    jsr negate_damp_vx
+    rts
+
+.hit_right_div_u
+    lda #112
+    sta ball_xi,x
+    jsr negate_damp_vx
+    rts
+
+.hit_sling_l
+    ; Only kick if in the slingshot triangle (X = 40..48); X = 32..39 is the Left Inlane!
+    cmp #40
+    bcc .upper_ret
+    lda #49
+    sta ball_xi,x
+    lda #$00
+    sta ball_vxl,x
+    lda #$02
     sta ball_vxh,x
     jmp .sling_common
+
 .hit_sling_r
-    lda #94
+    lda #95
     sta ball_xi,x
-    lda #$E0
+    lda #$00
     sta ball_vxl,x
-    lda #$FD                ; Kick left & up!
+    lda #$FE
     sta ball_vxh,x
 .sling_common
     lda #$00
     sta ball_vyl,x
     lda #$FE
     sta ball_vyh,x
-    lda #5                  ; +500 pts
+    lda #5
     jsr add_score_100
     lda #SFX_SLING
     jsr sound_play_ch0
@@ -1074,75 +1263,101 @@ update_single_ball
     rts
 
 ; ---------------------------------------------------------------------------
-; Lower Playfield: Inlane Funnels, CORDIC Flippers & Drain (Y = 256..319, ball_yh == 1)
+; Lower Playfield: Outlanes, Inlane Funnels, Lower Flippers & V-Drain (Y >= 256)
 ; ---------------------------------------------------------------------------
 .lower_table_checks
-    ; If in shooter lane (X >= 132), skip funnels and flippers
     lda ball_xi,x
     cmp #132
     bcc .lower_main
     rts
 
 .lower_main
-    ; 1. Inlane Funnel Rails (Y = 256..282, ball_yl = 0..26):
-    ;    Left funnel slopes from X=17 at Y=256 to X=44 at Y=282
-    ;    Right funnel slopes from X=123 at Y=256 to X=96 at Y=282
+    ; 1. Outlanes vs Inlane Funnels (Y = 256..282 -> ball_yl = 0..26):
+    ;    - If ball is in Left Outlane (X < 26) or Right Outlane (X >= 118),
+    ;      it bypasses the inlane rails and slides down the outer V-funnel into the drain!
     lda ball_yl,x
     cmp #27
     bcs .chk_flippers
+
+    lda ball_xi,x
+    cmp #26
+    bcc .outlane_left_slide
+    cmp #118
+    bcs .outlane_right_slide
+
+    ; Inside the Inlanes (X = 26..117):
+    ; Left Inlane Rail slopes from X=32 at Y=256 to X=48 at Y=282
+    lda ball_yl,x
+    lsr
     clc
-    adc #18                 ; Left funnel X wall = 18 + (Y - 256)
+    adc #33
     cmp ball_xi,x
-    bcc .chk_right_funnel
+    bcc .chk_right_inlane
     sta ball_xi,x
-    lda #$C0
+    lda #$A0
     sta ball_vxl,x
-    lda #$00                ; Slide smoothly down-right onto Left Flipper!
+    lda #$00                ; Feed ball smoothly onto Lower Left Flipper!
     sta ball_vxh,x
     jmp .chk_flippers
 
-.chk_right_funnel
-    lda #122
+.chk_right_inlane
+    ; Right Inlane Rail slopes from X=111 at Y=256 to X=95 at Y=282
+    lda ball_yl,x
+    lsr
+    sta pb_tmp0
+    lda #110
     sec
-    sbc ball_yl,x           ; Right funnel X wall = 122 - (Y - 256)
+    sbc pb_tmp0
     cmp ball_xi,x
     bcs .chk_flippers
     sta ball_xi,x
-    lda #$40
+    lda #$60
     sta ball_vxl,x
-    lda #$FF                ; Slide smoothly down-left onto Right Flipper!
+    lda #$FF                ; Feed ball smoothly onto Lower Right Flipper!
     sta ball_vxh,x
+    jmp .chk_flippers
+
+.outlane_left_slide
+    ; Keep ball trapped in Left Outlane (X <= 23) heading to the bottom V-drain!
+    lda #21
+    sta ball_xi,x
+    rts
+
+.outlane_right_slide
+    ; Keep ball trapped in Right Outlane (X >= 120) heading to the bottom V-drain!
+    lda #121
+    sta ball_xi,x
+    rts
 
 .chk_flippers
-    ; 2. Left & Right Flippers (Y = 278..298 -> ball_yl = 22..42)
+    ; 2. Lower Left Flipper (X = 48..63) & Lower Right Flipper (X = 80..95) at Y = 280..294 (ball_yl = 24..38)
+    ;    Note the 16-pixel Center Drain Gap at X = 64..79 (and Outlanes at X < 48 or X > 95)!
     lda ball_yl,x
-    cmp #20
+    cmp #22
     bcc .lower_ret_1
-    cmp #44
+    cmp #40
     bcc .in_flipper_y
-    jmp .chk_apron_or_drain
+    jmp .chk_bottom_v_drain
 .in_flipper_y
 
-    ; Check Left Flipper (X = 40..67)
     lda ball_xi,x
-    cmp #40
-    bcc .lower_ret_1
-    cmp #68
-    bcs .chk_right_flipper
-    jmp .do_left_flipper
+    cmp #47
+    bcc .lower_ret_1        ; Left Outlane bypasses outside of Left Flipper!
+    cmp #64
+    bcc .do_left_flipper
+    cmp #80
+    bcc .lower_ret_1        ; Center Drain Gap (X = 64..79)!
+    cmp #97
+    bcc .do_right_flipper
 .lower_ret_1
     rts
+
 .do_left_flipper
-
-    ; Distance d from Left Flipper pivot (0..27)
+    ; Distance d from Lower Left Flipper pivot at X=48 (0..16)
     sec
-    sbc #40
-    sta pb_tmp0             ; pb_tmp0 = d (0..27)
+    sbc #47
+    sta pb_tmp0             ; d = 0..16
 
-    ; Compute flipper surface Y_low (in 256 + Y_low):
-    ;   If Up (pb_flipl == 2):  Y_low = 28 - (d >> 2)
-    ;   If Rest (pb_flipl < 2): Y_low = 28 + (d >> 2)
-    lsr
     lsr
     sta pb_tmp1
     lda pb_flipl
@@ -1157,48 +1372,46 @@ update_single_ball
     clc
     adc pb_tmp1
 .flipl_test_y
-    sta pb_tmp1             ; pb_tmp1 = surface Y_low
+    sta pb_tmp1
     lda ball_yl,x
     clc
     adc #4
     cmp pb_tmp1
     bcc .lower_ret_1
 
-    ; Ball contacted Left Flipper! Place ball on surface
     lda pb_tmp1
     sec
     sbc #4
     sta ball_yl,x
 
-    ; Is Left Flipper actively swinging upward (pb_flipl_vel > 0) or held up as a live catch?
     lda pb_flipl_vel
     bne .flipl_power_shot
-    ; Passive bounce / cradle on Left Flipper:
     lda ball_vyh,x
     bmi .lower_ret_1
-    ; Bounce upward with damping; if flipper is angled down, roll gently toward tip
-    lda #$40
-    sta ball_vyl,x
-    lda #$FF
-    sta ball_vyh,x
+    ; If flipper is HELD UP (pb_flipl == 2), cradle the ball;
+    ; if flipper is RESTING DOWN (pb_flipl == 0), let gravity roll the ball down into the center drain!
     lda pb_flipl
     cmp #2
     beq .flipl_cradle
-    lda #$60
+    lda #$90
     sta ball_vxl,x
-    lda #$00
+    lda #$00                ; Roll down-right toward X=64 center drain gap!
     sta ball_vxh,x
+    lda #$60
+    sta ball_vyl,x
+    lda #$00                ; Downward VY so resting flipper never bounces ball up forever!
+    sta ball_vyh,x
     rts
 .flipl_cradle
-    lda #$E0
+    lda #$00
     sta ball_vxl,x
-    lda #$FF
     sta ball_vxh,x
+    sta ball_vyl,x
+    sta ball_vyh,x
     rts
 
 .flipl_power_shot
-    ; CORDIC Power Shot from Left Flipper!
-    ;   Angle = $B4 + d * 2 ($B4 up-left to $E8 cross-court up-right)
+    ; CORDIC Power Shot from Lower Left Flipper (d = 0..16 -> angle $B4..$E4)
     lda pb_tmp0
     asl
     clc
@@ -1206,24 +1419,13 @@ update_single_ball
     sta pb_tmp1
     jmp .flipper_cordic_launch
 
-.chk_right_flipper
-    ; Check Right Flipper (X = 73..100)
-    cmp #73
-    bcc .lower_ret_2        ; Between flippers (X = 68..72 = 5px drain gap)
-    cmp #101
-    bcs .lower_ret_2
-    jmp .do_right_flipper
-.lower_ret_2
-    rts
 .do_right_flipper
-
-    ; Distance d from Right Flipper pivot at X=100 (0..27)
-    lda #100
+    ; Distance d from Lower Right Flipper pivot at X=96 (0..16)
+    lda #96
     sec
     sbc ball_xi,x
-    sta pb_tmp0             ; pb_tmp0 = d (0..27)
+    sta pb_tmp0             ; d = 0..16
 
-    lsr
     lsr
     sta pb_tmp1
     lda pb_flipr
@@ -1245,7 +1447,6 @@ update_single_ball
     cmp pb_tmp1
     bcc .lower_ret_2
 
-    ; Ball contacted Right Flipper! Place ball on surface
     lda pb_tmp1
     sec
     sbc #4
@@ -1255,28 +1456,29 @@ update_single_ball
     bne .flipr_power_shot
     lda ball_vyh,x
     bmi .lower_ret_2
-    lda #$40
-    sta ball_vyl,x
-    lda #$FF
-    sta ball_vyh,x
     lda pb_flipr
     cmp #2
     beq .flipr_cradle
-    lda #$A0
+    lda #$70
     sta ball_vxl,x
-    lda #$FF
+    lda #$FF                ; Roll down-left toward X=79 center drain gap!
     sta ball_vxh,x
+    lda #$60
+    sta ball_vyl,x
+    lda #$00                ; Downward VY into center drain!
+    sta ball_vyh,x
+.lower_ret_2
     rts
 .flipr_cradle
-    lda #$20
-    sta ball_vxl,x
     lda #$00
+    sta ball_vxl,x
     sta ball_vxh,x
+    sta ball_vyl,x
+    sta ball_vyh,x
     rts
 
 .flipr_power_shot
-    ; CORDIC Power Shot from Right Flipper!
-    ;   Angle = $CC - d * 2 ($CC up-right to $98 cross-court up-left into Hyper Ramp!)
+    ; CORDIC Power Shot from Lower Right Flipper (d = 0..16 -> angle $CC..$9C)
     lda pb_tmp0
     asl
     sta pb_tmp1
@@ -1286,8 +1488,8 @@ update_single_ball
     sta pb_tmp1
 
 .flipper_cordic_launch
-    ; Rotate launch velocity ($03A0 = 3.625 px/frame) by shot angle pb_tmp1 via CORDIC!
-    lda #$A0
+    ; Rotate launch velocity ($03C0 = 3.75 px/frame) by shot angle pb_tmp1 via CORDIC!
+    lda #$C0
     sta M_X
     lda #$03
     sta M_X+1
@@ -1305,42 +1507,37 @@ update_single_ball
     sta ball_vyl,x
     lda M_YR+1
     sta ball_vyh,x
-    lda #1                  ; +100 pts per flipper shot
+    lda #1
     jsr add_score_100
     ldx pb_tmp3
-.lower_done
     rts
 
-.chk_apron_or_drain
-    ; 3. Drain Apron Guides (Y = 300..314 -> ball_yl = 44..58):
-    ;    Outside the center drain gap (X < 56 or X > 84), apron bounces ball back to flippers;
-    ;    inside center drain gap, ball drains at Y >= 314 (ball_yl >= 58)!
-    lda ball_xi,x
-    cmp #56
-    bcc .apron_save_l
-    cmp #85
-    bcc .check_drain_bottom
-    lda #84
-    sta ball_xi,x
-    lda #$40
-    sta ball_vyl,x
-    lda #$FE
-    sta ball_vyh,x
-    rts
-.apron_save_l
-    lda #56
-    sta ball_xi,x
-    lda #$40
-    sta ball_vyl,x
-    lda #$FE
-    sta ball_vyh,x
-    rts
-
-.check_drain_bottom
+.chk_bottom_v_drain
+    ; 3. Bottom V-Funnel Drain Ramp (Y = 296..316 -> ball_yl = 40..60):
+    ;    Any ball that falls below Y=296 (either through the center gap X=64..79
+    ;    or down the Left/Right Outlanes) slides down the V-apron into the drain hole!
     lda ball_yl,x
-    cmp #58
-    bcc .lower_done
-    ; Ball drained through center gap!
+    cmp #56
+    bcs .ball_drained_now
+    lda ball_xi,x
+    cmp #68
+    bcc .slide_v_right
+    cmp #76
+    bcc .keep_falling
+    lda #$00
+    sta ball_vxl,x
+    lda #$FF
+    sta ball_vxh,x
+    rts
+.slide_v_right
+    lda #$00
+    sta ball_vxl,x
+    lda #$01
+    sta ball_vxh,x
+.keep_falling
+    rts
+
+.ball_drained_now
     lda #0
     sta ball_act,x
     rts
@@ -1356,7 +1553,6 @@ negate_damp_vx
     lda #0
     sbc ball_vxh,x
     sta ball_vxh,x
-    ; Multiply by 3/4 (subtract 1/4)
     cmp #$80
     ror
     sta pb_tmp1
@@ -1380,30 +1576,22 @@ negate_damp_vx
     rts
 
 ; ---------------------------------------------------------------------------
-; advance_multiball_lock: Charge Ignition Core Lock -> Trigger 3-Ball Multi-Ball!
+; advance_multiball_lock: Called when player shoots the LIT Upper-Right Lock Chute!
+;   Requires clearing all 4 Center Cards before EACH lock; 2nd lock starts Multi-Ball!
 ; ---------------------------------------------------------------------------
 advance_multiball_lock
+    lda #0
+    sta pb_lock_lit         ; Consume Lock Lit state
+    sta pb_drops            ; Reset all 4 Center Cards so player must clear them again!
     inc pb_locks
     lda pb_locks
     cmp #1
-    bne .chk_lock2
-    lda #25                 ; +2,500 pts
+    bne .trigger_multiball
+    lda #50                 ; +5,000 pts for Lock 1!
     jsr add_score_100
     lda #TXT_LOCK1
     sta pb_banner_id
-    lda #75
-    sta pb_banner_tmr
-    lda #SFX_LOCK
-    jmp sound_play_ch1
-
-.chk_lock2
-    cmp #2
-    bne .trigger_multiball
-    lda #50                 ; +5,000 pts
-    jsr add_score_100
-    lda #TXT_LOCK2
-    sta pb_banner_id
-    lda #75
+    lda #85
     sta pb_banner_tmr
     lda #SFX_LOCK
     jmp sound_play_ch1
@@ -1418,12 +1606,9 @@ advance_multiball_lock
     sta pb_banner_id
     lda #120
     sta pb_banner_tmr
-    lda #240                ; 4-second Multi-Ball ball saver
-    sta pb_saver
     lda #SFX_MULTIBALL
     jsr sound_play_ch1
 
-    ; Spawn Ball 1 and Ball 2 if not already active!
     ldy #1
 .mb_spawn_loop
     lda ball_act,y
@@ -1452,20 +1637,21 @@ advance_multiball_lock
     bcc .mb_spawn_loop
     rts
 
-mb_spawn_x      .byte 72, 66, 78
-mb_spawn_y      .byte 140, 144, 52
+mb_spawn_x      .byte 72, 56, 88
+mb_spawn_y      .byte 140, 84, 84
 mb_spawn_vxh    .byte 0, $FE, $02
-mb_spawn_vyh    .byte 0, $FE, $01
+mb_spawn_vyh    .byte 0, $01, $01
 
-bmp_x_tbl       .byte 48, 88, 68
-bmp_y_tbl       .byte 72, 72, 102
+; 4 Pop Bumpers: 0 = Upper (68, 68); 1..3 = Lower Triangle (48, 204), (92, 204), (70, 224)
+bmp_x_tbl       .byte 68, 48, 92, 70
+bmp_y_tbl       .byte 68, 204, 204, 224
 
 ; ===========================================================================
 ; pinball_draw: Plot all scrolling playfield sprites & DMD banners
 ; ===========================================================================
 pinball_draw
-    ; 1. Draw 3 Neon Pop Bumpers at (48, 72), (88, 72), (68, 102)
-    ldx #2
+    ; 1. Draw 4 Neon Pop Bumpers
+    ldx #NUM_BUMPERS-1
 .draw_bmp_loop
     stx pb_tmp3
     lda #IMG_BUMPER
@@ -1491,22 +1677,20 @@ pinball_draw
     dex
     bpl .draw_bmp_loop
 
-    ; 2. Draw 3 Top Rollover Lane Indicator Gems (Y = 38, X = 46, 70, 94)
+    ; 2. Draw 3 Top Rollover Lane Gems (Y = 38, X = 42, 66, 90)
     ldx #2
 .draw_roll_loop
     stx pb_tmp3
     lda #IMG_GEM
     sta pimg
+    lda #1                  ; Small gem frame
+    sta pframe
     lda pb_rollovers
     and bit_mask_tbl,x
     beq .roll_unlit
-    lda #1
-    sta pframe
     lda #1                  ; Lit Gold
     bne .roll_pal_set
 .roll_unlit
-    lda #0
-    sta pframe
     lda #3                  ; Cyan
 .roll_pal_set
     sta ppal
@@ -1519,40 +1703,53 @@ pinball_draw
     dex
     bpl .draw_roll_loop
 
-    ; 3. Draw 3 Left Drop Targets (X = 24, Y = 182, 198, 214)
-    ldx #2
-.draw_drop_loop
+    ; 3. Draw 4 Center Emerald Card Targets (Y = 164, X = 40, 56, 72, 88)
+    ldx #3
+.draw_card_loop
     stx pb_tmp3
+    lda #IMG_GEM
+    sta pimg
     lda pb_drops
     and bit_mask_tbl,x
-    bne .skip_drop_draw     ; Knocked down!
-    lda #IMG_GEM
-    sta pimg
-    lda #0
+    beq .card_up
+    lda #1                  ; Hit/Lit indicator
     sta pframe
-    lda #5                  ; Emerald Green
-    sta ppal
-    lda #24
-    sta px
-    lda drop_y_tbl,x
-    ldy #0
-    jsr draw_world_sprite
-.skip_drop_draw
-    ldx pb_tmp3
-    dex
-    bpl .draw_drop_loop
-
-    ; 4. Draw Center Ignition Core Lock Target at (70, 138) & Right Warp Spinner at (110, 150)
-    lda #IMG_GEM
-    sta pimg
-    lda pb_locks
-    and #1
+    lda #1
+    bne .card_draw
+.card_up
+    lda #0                  ; Full green card target
     sta pframe
     lda #5
+.card_draw
     sta ppal
-    lda #70
+    lda card_x_tbl,x
     sta px
-    lda #138
+    lda #164
+    ldy #0
+    jsr draw_world_sprite
+    ldx pb_tmp3
+    dex
+    bpl .draw_card_loop
+
+    ; 4. Draw Upper-Right Lock Chute Indicator at (108, 60) & Right Spinner at (118, 198)
+    lda #IMG_GEM
+    sta pimg
+    lda #1
+    sta pframe
+    lda #5
+    ldy pb_lock_lit
+    beq .lock_ind_pal
+    lda pb_frame
+    lsr
+    lsr
+    and #1
+    clc
+    adc #1                  ; Flash Gold/Red when Lock is LIT!
+.lock_ind_pal
+    sta ppal
+    lda #108
+    sta px
+    lda #60
     ldy #0
     jsr draw_world_sprite
 
@@ -1564,20 +1761,45 @@ pinball_draw
     sta pframe
     lda #4
     sta ppal
-    lda #110
+    lda #118
     sta px
-    lda #150
+    lda #198
     ldy #0
     jsr draw_world_sprite
 
-    ; 5. Draw Left Flipper (X = 44, Y = 282) & Right Flipper (X = 76, Y = 282)
+    ; 5. Draw Upper Flippers (Left at X=40, Y=128; Right at X=88, Y=128)
     lda #IMG_FLIPL
     sta pimg
     lda pb_flipl
     sta pframe
-    lda #1
+    lda #3                  ; Electric Cyan Upper Flippers (like NES Pinball!)
     sta ppal
-    lda #44
+    lda #40
+    sta px
+    lda #128
+    ldy #0
+    jsr draw_world_sprite
+
+    lda #IMG_FLIPR
+    sta pimg
+    lda pb_flipr
+    sta pframe
+    lda #3
+    sta ppal
+    lda #88
+    sta px
+    lda #128
+    ldy #0
+    jsr draw_world_sprite
+
+    ; 6. Draw Lower Flippers (Left at X=48, Y=282; Right at X=80, Y=282 — flush with cols 5 & 12!)
+    lda #IMG_FLIPL
+    sta pimg
+    lda pb_flipl
+    sta pframe
+    lda #1                  ; Gold Lower Flippers
+    sta ppal
+    lda #48
     sta px
     lda #<282
     ldy #>282
@@ -1589,13 +1811,13 @@ pinball_draw
     sta pframe
     lda #1
     sta ppal
-    lda #76
+    lda #80
     sta px
     lda #<282
     ldy #>282
     jsr draw_world_sprite
 
-    ; 6. Draw Spring Plunger at (136, 288)
+    ; 7. Draw Spring Plunger at (136, 288)
     lda #IMG_PLUNGER
     sta pimg
     lda pb_plunger
@@ -1616,7 +1838,7 @@ pinball_draw
     ldy #>288
     jsr draw_world_sprite
 
-    ; 7. Draw all active Chrome Steel Pinballs (0..2)
+    ; 8. Draw all active Chrome Steel Pinballs (0..2)
     ldx #0
 .draw_ball_loop
     stx pb_tmp3
@@ -1626,7 +1848,7 @@ pinball_draw
     sta pimg
     lda #0
     sta pframe
-    lda #7                  ; P7 Chrome Steel
+    lda #7
     sta ppal
     lda ball_xi,x
     sec
@@ -1647,10 +1869,9 @@ pinball_draw
     cpx #MAX_BALLS
     bcc .draw_ball_loop
 
-    ; 8. Draw Playfield Callout Banner / Title Overlay via pf_text
+    ; 9. Draw Playfield Callout Banner / Title Overlay via pf_text
     lda pb_state
     bne .chk_game_banner
-    ; Attract / Title Mode Banners
     lda #4
     sta tzone
     lda #3
@@ -1687,7 +1908,6 @@ pinball_draw
 
 ; ---------------------------------------------------------------------------
 ; draw_world_sprite: Convert world Y (A = low, Y = high) -> py = world_y - cam_y + 32
-;                    and call pf_drawimg if visible on screen!
 ; ---------------------------------------------------------------------------
 draw_world_sprite
     sec
@@ -1695,8 +1915,8 @@ draw_world_sprite
     sta pb_tmp0
     tya
     sbc #0
-    bmi .dws_above          ; Slightly above cam_y? Check if within -15..0
-    bne .dws_out            ; >= 256 lines below cam_y -> off screen
+    bmi .dws_above
+    bne .dws_out
     lda pb_tmp0
     cmp #209
     bcs .dws_out
@@ -1707,7 +1927,7 @@ draw_world_sprite
     cmp #$FF
     bne .dws_out
     lda pb_tmp0
-    cmp #241                ; -15..0 -> +32 gives 17..32
+    cmp #241
     bcc .dws_out
     clc
     adc #32
@@ -1716,6 +1936,6 @@ draw_world_sprite
 .dws_out
     rts
 
-bit_mask_tbl    .byte 1, 2, 4
-roll_x_tbl      .byte 46, 70, 94
-drop_y_tbl      .byte 182, 198, 214
+bit_mask_tbl    .byte 1, 2, 4, 8
+roll_x_tbl      .byte 42, 66, 90
+card_x_tbl      .byte 40, 56, 72, 88
