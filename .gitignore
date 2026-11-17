@@ -1,0 +1,7 @@
+build/
+cfg/
+snap/
+*.a78
+*.bin
+.DS_Store
+__pycache__/
