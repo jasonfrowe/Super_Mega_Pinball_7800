@@ -1,0 +1,62 @@
+<!doctype html>
+<!--
+  Super Mega Pinball 7800 in the browser.
+  The emulator is js7800 by raz0red (GPL-2.0), from the js7800_astrocart fork,
+  which adds the AstroCart math unit and second POKEY. No inline scripts: the
+  page runs under a strict Content-Security-Policy (script-src 'self').
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Super Mega Pinball 7800</title>
+<meta name="description" content="An Atari 7800 pinball table with real flipper physics, a wire ramp, multiball and dual-POKEY music, playable in your browser.">
+<link rel="stylesheet" href="style.css">
+<script src="js/js7800.min.js"></script>
+<script src="play.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <h1>Super Mega Pinball <span>7800</span></h1>
+  <p class="tag">An Atari 7800 pinball table for the AstroCart</p>
+</header>
+
+<main>
+  <div id="player">
+    <div id="js7800__target"></div>
+    <p id="status" class="status">Loading the cartridge&hellip;</p>
+  </div>
+
+  <section class="help">
+    <h2>Controls</h2>
+    <table>
+      <tr><th>Left flipper</th><td><kbd>&larr;</kbd> or <kbd>Z</kbd></td></tr>
+      <tr><th>Right flipper</th><td><kbd>&rarr;</kbd> or <kbd>X</kbd></td></tr>
+      <tr><th>Plunger</th><td>hold <kbd>&darr;</kbd>, let go to launch</td></tr>
+      <tr><th>Nudge</th><td><kbd>&uarr;</kbd> (not too often)</td></tr>
+      <tr><th>Start</th><td><kbd>Z</kbd> on the title screen</td></tr>
+      <tr><th>Pause / Reset</th><td><kbd>F4</kbd> / <kbd>F3</kbd></td></tr>
+    </table>
+    <p>A gamepad works too. Click the screen or press a key if there is no sound:
+      browsers start audio only after you do something on the page.</p>
+  </section>
+
+  <section class="about">
+    <h2>The table</h2>
+    <p>Pop bumpers, slingshots, the M-E-G-A lanes, a wire ramp over the top,
+      drop targets that light the lock, and three-ball multiball. The flippers are
+      real rotating capsules, and the physics runs on the
+      <a href="https://github.com/jasonfrowe/Super_Mega_Pinball_7800">AstroCart</a>'s
+      math unit, with music on two POKEY chips.</p>
+    <p><a href="pinball.a78" download>Download the ROM</a> (48K .a78) for an AstroCart or an emulator with
+      AstroCart support.</p>
+  </section>
+</main>
+
+<footer>
+  <p>Game: <a href="https://github.com/jasonfrowe/Super_Mega_Pinball_7800">Super_Mega_Pinball_7800</a>.
+    Emulator: <a href="https://github.com/raz0red/js7800">js7800</a> by raz0red (GPL-2.0),
+    with AstroCart support from <a href="https://github.com/jasonfrowe/js7800_astrocart">js7800_astrocart</a>.</p>
+</footer>
+</body>
+</html>
