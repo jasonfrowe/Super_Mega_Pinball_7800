@@ -32,6 +32,9 @@ const surface = new Array(W * H).fill(0);
 Maria.SetSurface(surface);
 const keys = new Array(19).fill(0);
 Events.fireEvent("init", { keyboardData: keys, Region, debug: false });
+// no High Score Cartridge (as js7800.js's default callback): carts that ask for one run without it
+Events.fireEvent("highScoreCallbackChanged", {
+  getRom: () => null, write: () => {}, loadSram: (done) => done(null) });
 
 const cart = new Uint8Array(readFileSync(romPath));
 Cartridge.Load(cart, cart.length);

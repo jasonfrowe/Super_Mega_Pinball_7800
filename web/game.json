@@ -1,0 +1,23 @@
+{
+  "slug": "pinball",
+  "title": "Super Mega Pinball 7800",
+  "title_accent": "7800",
+  "tagline": "An Atari 7800 pinball table for the AstroCart",
+  "rom": "build/pinball.a78",
+  "build": "tools/build.sh",
+  "ready": "Press Z to start. Click or press a key for sound.",
+  "controls": [
+    ["Left flipper", "[←] or [Z]"],
+    ["Right flipper", "[→] or [X]"],
+    ["Plunger", "hold [↓], let go to launch"],
+    ["Nudge", "[↑] (not too often)"],
+    ["Start", "[Z] on the title screen"],
+    ["Pause / Reset", "[F4] / [F3]"]
+  ],
+  "about": [
+    "Pop bumpers, slingshots, the M-E-G-A lanes, a wire ramp over the top, drop targets that light the lock, and three-ball multiball.",
+    "The flippers are real rotating capsules, and the physics runs on the AstroCart's math unit, with music on two POKEY chips."
+  ],
+  "repo": "https://github.com/jasonfrowe/Super_Mega_Pinball_7800",
+  "image": "docs/upper.png"
+}
