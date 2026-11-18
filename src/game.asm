@@ -1459,6 +1459,16 @@ lamps_clear
     bpl .c
     rts
 
+    ; lamp groups the code indexes by number must be consecutive
+    if LAMP_DROP1 != LAMP_DROP0+1 || LAMP_DROP2 != LAMP_DROP0+2 || LAMP_DROPLIT1 != LAMP_DROPLIT0+1 || LAMP_DROPLIT2 != LAMP_DROPLIT0+2
+    echo "drop target lamps out of order"
+    err
+    endif
+    if LAMP_STAND1 != LAMP_STAND0+1 || LAMP_STAND2 != LAMP_STAND0+2 || LAMP_BUMPER2 != LAMP_BUMPER0+2 || LAMP_LANE3 != LAMP_LANE0+3 || LAMP_BONUS3 != LAMP_BONUS0+3
+    echo "lamp group out of order"
+    err
+    endif
+
     SUBROUTINE
 drops_reset
     lda #0
@@ -1493,6 +1503,7 @@ drops_lamps                 ; drop targets standing = their lamps on
     sta lamp_state,y
     dex
     bpl .l
+    inc lamp_dirty
     rts
 
 ; the lane lamps follow g_lanes

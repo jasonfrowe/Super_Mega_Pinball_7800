@@ -258,11 +258,14 @@ DROP_Y = 232
 for i, (x0, x1) in enumerate(DROPS):
     T.wall([(x0, DROP_Y), (x1, DROP_Y)], front=((x0 + x1) / 2, DROP_Y + 20),
            event=T.event(f"drop{i}"), drop=i + 1, e=0.35)
+    # the back face: a standing target is solid from behind too (no event)
+    T.wall([(x0, DROP_Y - 6), (x1, DROP_Y - 6)], front=((x0 + x1) / 2, DROP_Y - 30),
+           drop=i + 1, e=0.35)
 
 # over the bank, a sloped roof (one way: balls from above roll off to the
 # right; balls from below pass up through it when the targets are down)
-DROP_ROOF = [(120, DROP_Y - 18), (200, DROP_Y - 7)]
-T.wall(DROP_ROOF, front=(160, DROP_Y - 40), e=0.3)
+DROP_ROOF = [(116, DROP_Y - 2), (120, DROP_Y - 18), (200, DROP_Y - 7), (204, DROP_Y - 2)]
+T.wall(DROP_ROOF, front=(100, DROP_Y - 12), e=0.3)
 
 # standup targets on the return lane wall (S T A R)
 STANDUPS = [(250, 266), (274, 290), (298, 322)]
@@ -510,7 +513,13 @@ def draw():
     arrow((24, 160), -90, 18, 8, 4, T.lamp("orbit_arrow"))
     poly([(12, 200), (36, 200), (36, 210), (12, 210)], lambda x, y: (0, 2 if int(y) % 3 else 3))
 
-    # -- drop targets (each a lamp object: hidden when dropped)
+    # -- drop targets (each a lamp object: hidden when dropped). The game
+    # indexes LAMP_DROP0+n and LAMP_DROPLIT0+n, so each group's ids must run
+    # in order: register them before drawing.
+    for i in range(len(DROPS)):
+        T.lamp(f"drop{i}")
+    for i in range(len(DROPS)):
+        T.lamp(f"droplit{i}")
     for i, (x0, x1) in enumerate(DROPS):
         L = T.lamp(f"drop{i}")
         poly([(x0, DROP_Y - 6), (x1, DROP_Y - 6), (x1, DROP_Y + 2), (x0, DROP_Y + 2)],

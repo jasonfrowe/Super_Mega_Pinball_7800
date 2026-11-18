@@ -286,6 +286,12 @@ pf_z14fill
     lda pfs
     cmp z14_f,x
     bne .z14b
+    ldy pfrow               ; reused: bring its lamps up to date
+    cpy #TABLE_ROWS
+    bcs .z14k
+    jsr pf_lamps_row
+.z14k
+    ldx z14_x
     lda z14_bg,x
     jmp .z14n
 .z14b
