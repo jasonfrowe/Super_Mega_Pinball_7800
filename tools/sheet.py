@@ -46,14 +46,19 @@ def write_png(path, w, h, rows):
                            ch(b"IDAT", zlib.compress(raw, 6)) + ch(b"IEND", b""))
 
 
-out, cols, files = sys.argv[1], int(sys.argv[2]), sys.argv[3:]
-imgs = [read_png(f) for f in files]
-w, h = imgs[0][0], imgs[0][1]
-nr = (len(imgs) + cols - 1) // cols
-W, H = cols * (w + 4), nr * (h + 4)
-sheet = [[(40, 40, 40)] * W for _ in range(H)]
-for k, (iw, ih, rows) in enumerate(imgs):
-    ox, oy = (k % cols) * (w + 4), (k // cols) * (h + 4)
-    for y in range(ih):
-        sheet[oy + y][ox:ox + iw] = rows[y]
-write_png(out, W, H, sheet)
+def main():
+    out, cols, files = sys.argv[1], int(sys.argv[2]), sys.argv[3:]
+    imgs = [read_png(f) for f in files]
+    w, h = imgs[0][0], imgs[0][1]
+    nr = (len(imgs) + cols - 1) // cols
+    W, H = cols * (w + 4), nr * (h + 4)
+    sheet = [[(40, 40, 40)] * W for _ in range(H)]
+    for k, (iw, ih, rows) in enumerate(imgs):
+        ox, oy = (k % cols) * (w + 4), (k // cols) * (h + 4)
+        for y in range(ih):
+            sheet[oy + y][ox:ox + iw] = rows[y]
+    write_png(out, W, H, sheet)
+
+
+if __name__ == "__main__":
+    main()

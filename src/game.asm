@@ -528,6 +528,8 @@ play_step
     lda #LAMP_RAMP_ARROW
     ldx #0
     jsr lamp_set
+    lda #MUS_MAIN           ; back to the game's tune
+    jsr mus_play
 .nm
     lda g_tmp
     bne .cam

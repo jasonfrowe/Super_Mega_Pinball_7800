@@ -124,6 +124,8 @@ z14_f       = $211A ; [2] at this fine scroll
 z14_bg      = $211C ; [2] its background bytes
 z14_cur     = $211E ; the row zone 14 shows
 lamp_dirty  = $211F
+pf_r0       = $2122 ; map row in zone 1 this frame
+z14_x       = $2123 ; zone 14 buffer being built
 
 ; game, physics, sound RAM: $22E0-$27FF (see each file)
 
@@ -238,13 +240,21 @@ START
     sta CTRL
 
 ; ---------------------------------------------------------------------------
-; Main loop: one game step and one frame built per pass. The NMI at the
-; bottom of the screen commits the frame (DLL, display list ends) in vblank.
+; Main loop. Right after vblank begins (the bottom DLI bumps `frame`) the
+; frame is built and handed to MARIA all at once: zones, sprites, list ends,
+; DLL. The playfield isn't shown again until after the top border and the
+; HUD (~46 lines), so MARIA never shows half of one frame's sprites and half
+; of the next. Then the game steps for the next frame; if the last pass ran
+; late (heavy multiball), the missed steps are run too, so the game keeps
+; its speed and only the frame rate drops.
     SUBROUTINE
 main_loop
-    ; frames shown since the last pass: if the last pass ran late (heavy
-    ; multiball), run the missed game steps too (without drawing them), so
-    ; the game keeps its speed and only the frame rate drops
+    jsr pf_frame            ; map rows to zones for the camera, reset sprites
+    jsr pf_commit           ; the zones into the DLL first: MARIA reads them soonest
+    jsr pf_z14fill          ; zone 14 is shown last
+    jsr game_draw           ; sprites, lamps, HUD
+    jsr pf_terminate
+    ; game steps: one, plus any frames missed
     lda frame
     sec
     sbc mframe
@@ -266,21 +276,20 @@ main_loop
     bne .c1
 .one
     jsr game_step           ; input, physics, rules, camera, sound cues
-    jsr pf_frame            ; map rows to zones for the camera, reset sprites
-    jsr game_draw           ; sprites, lamps, HUD
-    lda #1
-    sta frame_ready
-.wait
-    lda frame_ready
-    bne .wait
     inc tick
+    jsr pf_prefetch         ; the rows next to the screen, ready for a scroll step
+    ; wait for the next vblank
+    lda frame
+.wait
+    cmp frame
+    beq .wait
     jmp main_loop
 
 ; ---------------------------------------------------------------------------
 ; NMI: two display list interrupts a frame.
 ;   phase 0: end of the HUD -> the playfield's palette 7
-;   phase 1: bottom of the screen (vblank) -> commit the frame, the HUD's
-;            palette 7, music
+;   phase 1: bottom of the screen (vblank) -> the HUD's palette 7, music,
+;            and `frame` counts on (the main loop waits for it)
     SUBROUTINE
 NMI
     pha
@@ -310,13 +319,6 @@ NMI
     lda hudpal+2
     sta P0C1+30
     inc frame
-    lda frame_ready
-    beq .nmi_snd
-    jsr pf_terminate
-    jsr pf_commit
-    lda #0
-    sta frame_ready
-.nmi_snd
     jsr snd_tick
 .nmi_out
     pla

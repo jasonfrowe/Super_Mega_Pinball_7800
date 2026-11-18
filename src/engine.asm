@@ -77,12 +77,15 @@ pf_init
     sta cam_lo
     sta cam_hi
     jsr pf_frame
-    jsr pf_terminate
-    jmp pf_commit
+    jsr pf_commit
+    jsr pf_z14fill
+    jmp pf_terminate
 
+    SUBROUTINE
 hud_dl
     .byte <hudtext, $60, >hudtext, (7<<5)|((-20)&31), 0, 0, 0
 
+    SUBROUTINE
 dll_init
     .byte $07, >EMPTYDL, <EMPTYDL           ; 8 blank lines
     .byte $8F, >HUDDL, <HUDDL               ; HUD, 16 lines, DLI at its end
@@ -154,6 +157,7 @@ pf_frame
     lsr pft1
     ror
     sta pfrow               ; row for zone 1
+    sta pf_r0
 
     ldx #1
 .zones
@@ -185,7 +189,47 @@ pf_frame
     inx
     cpx #14
     bne .zones
-    jmp pf_zone14
+    ; zone 14's buffer (its contents: pf_z14fill, after the commit)
+    lda pfz14back
+    sta z14_x
+    tax
+    clc
+    adc #16
+    sta zonebuf+14
+    lda z14lo,x
+    sta zonelo+14
+    lda z14hi,x
+    sta zonehi+14
+    lda pfrow
+    sta z14_cur
+    rts
+
+; pf_prefetch: (outside vblank) the rows just above and below the screen
+; into their slots, which are not on screen, so a coarse scroll step next
+; frame finds them ready and the frame's work at vblank stays short.
+    SUBROUTINE
+pf_prefetch
+    lda pf_r0
+    sec
+    sbc #1
+    bcc .below
+    jsr .one
+.below
+    lda pf_r0
+    clc
+    adc #13
+    cmp #TABLE_ROWS
+    bcs .r
+.one
+    sta pfrow
+    and #15
+    tay
+    lda pfrow
+    cmp slot_row,y
+    beq .r
+    jmp pf_fillslot
+.r
+    rts
 
 ; Fill slot (pfrow & 15) with map row pfrow
     SUBROUTINE
@@ -224,20 +268,17 @@ pf_fillslot
     ldy pfrow
     jmp pf_lamps_row
 
-; Zone 14: the back buffer shows row pfrow (= R0+13)
+; Zone 14's contents: row z14_cur (R0+13) in buffer z14_x, unless it
+; already holds that row at this fine scroll
     SUBROUTINE
-pf_zone14
-    lda pfz14back
-    tax
-    clc
-    adc #16
-    sta zonebuf+14
-    lda z14lo,x
+pf_z14fill
+    ldx z14_x
+    lda zonelo+14
     sta pfq
-    sta zonelo+14
-    lda z14hi,x
+    lda zonehi+14
     sta pfq+1
-    sta zonehi+14
+    lda z14_cur
+    sta pfrow
     ; the same row at the same fine scroll as when this buffer was built?
     lda pfrow
     cmp z14_row,x
@@ -296,14 +337,12 @@ pf_zone14
     jsr pf_lamps_row
     lda pft1
 .z14n
-    ldx pfz14back
+    ldx z14_x
     sta z14_bg,x
     sta dlendsave+14
     sta dlend+14
     sta zoneold+14          ; sprites in the back buffer are all new
     sta oldend+16,x
-    lda pfrow
-    sta z14_cur
     rts
 
 z14lo .byte <Z14BASE, <(Z14BASE+BUFSIZE)
@@ -665,12 +704,14 @@ ZN SET ZN+1
     sta pfz14back
     rts
 
+    SUBROUTINE
 slotlo
 SLI SET 0
     REPEAT 16
     .byte <(SLOTBASE+SLI*BUFSIZE)
 SLI SET SLI+1
     REPEND
+    SUBROUTINE
 slothi
 SLI SET 0
     REPEAT 16
