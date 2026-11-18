@@ -4,7 +4,9 @@ A scrolling pinball table for the **Atari 7800**, in the spirit of the great
 Amiga and DOS pinball games, built for the **AstroCart**: its math unit does
 the physics and two POKEYs play the music.
 
-![The table](docs/table.png)
+[![The table: click to play it in your browser](docs/table.png)](https://jasonfrowe.github.io/Super_Mega_Pinball_7800/)
+
+**[▶ Play it in your browser](https://jasonfrowe.github.io/Super_Mega_Pinball_7800/)** (keyboard or gamepad), or on [jasonrowe.org](https://jasonrowe.org/Atari7800/pinball/). It runs in [js7800_astrocart](https://github.com/jasonfrowe/js7800_astrocart), an Atari 7800 emulator with the AstroCart's math unit and second POKEY.
 
 | | | |
 |---|---|---|
